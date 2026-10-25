@@ -46,11 +46,14 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -126,6 +129,8 @@ private fun TelegramApp(session: TelegramSession) {
                         onOpenSearchResult = { session.openChat(it.chatId, it.messageId) },
                         onOpen = { session.openChat(it) },
                         onLoadMore = { session.loadMoreChats() },
+                        onTogglePin = { session.togglePinned(it) },
+                        onMarkUnread = { session.markChatUnread(it) },
                         onLogout = { session.logOut() }
                     )
                 } else {
@@ -248,6 +253,8 @@ private fun ChatListScreen(
     onOpenSearchResult: (TelegramSearchResult) -> Unit,
     onOpen: (Long) -> Unit,
     onLoadMore: () -> Unit,
+    onTogglePin: (Long) -> Unit,
+    onMarkUnread: (Long) -> Unit,
     onLogout: () -> Unit
 ) {
     var searchVisible by remember { mutableStateOf(false) }
@@ -303,7 +310,12 @@ private fun ChatListScreen(
                 val filtered = state.chats.filter { it.title.contains(search, true) || it.preview.contains(search, true) }
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(filtered, key = { it.id }) { chat ->
-                        ChatRow(chat) { onOpen(chat.id) }
+                        ChatRow(
+                            chat = chat,
+                            onClick = { onOpen(chat.id) },
+                            onTogglePin = { onTogglePin(chat.id) },
+                            onMarkUnread = { onMarkUnread(chat.id) }
+                        )
                     }
                     item {
                         Row(Modifier.fillMaxWidth().clickable(onClick = onLoadMore).padding(18.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
@@ -331,8 +343,14 @@ private fun SearchResultRow(result: TelegramSearchResult, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ChatRow(chat: TelegramChat, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun ChatRow(
+    chat: TelegramChat,
+    onClick: () -> Unit,
+    onTogglePin: () -> Unit,
+    onMarkUnread: () -> Unit
+) {
+    var menuExpanded by remember(chat.id) { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(52.dp).background(avatarColor(chat.title), CircleShape), contentAlignment = Alignment.Center) {
             Text(chat.title.trim().take(1).uppercase().ifBlank { "T" }, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 20.sp)
         }
@@ -349,6 +367,19 @@ private fun ChatRow(chat: TelegramChat, onClick: () -> Unit) {
                 Box(Modifier.background(TelegramBlue, CircleShape).padding(horizontal = 7.dp, vertical = 2.dp)) {
                     Text(chat.unreadCount.toString(), color = Color.White, fontSize = 11.sp)
                 }
+            }
+        }
+        Box {
+            IconButton(onClick = { menuExpanded = true }) { Icon(Icons.Default.MoreVert, "Ações da conversa", tint = Muted) }
+            DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                DropdownMenuItem(
+                    text = { Text(if (chat.isPinned) "Desafixar conversa" else "Fixar conversa") },
+                    onClick = { menuExpanded = false; onTogglePin() }
+                )
+                DropdownMenuItem(
+                    text = { Text("Marcar como não lida") },
+                    onClick = { menuExpanded = false; onMarkUnread() }
+                )
             }
         }
     }

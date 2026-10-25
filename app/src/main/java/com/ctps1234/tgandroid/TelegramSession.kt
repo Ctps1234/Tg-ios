@@ -25,7 +25,8 @@ internal data class TelegramChat(
     val title: String,
     val preview: String,
     val unreadCount: Int,
-    val date: Int
+    val date: Int,
+    val isPinned: Boolean = false
 )
 
 internal data class TelegramSearchResult(
@@ -76,6 +77,7 @@ internal class TelegramSession private constructor(private val context: Context)
     @Volatile private var apiHash: String = savedApiHash()
     @Volatile private var searchGeneration: Int = 0
     private val chats = linkedMapOf<Long, TdApi.Chat>()
+    private val pinnedChatIds = mutableSetOf<Long>()
     private val messages = linkedMapOf<Long, MutableList<TelegramMessage>>()
     private val lock = Any()
 
@@ -120,7 +122,17 @@ internal class TelegramSession private constructor(private val context: Context)
     private fun onUpdate(obj: TdApi.Object) {
         when (obj) {
             is TdApi.UpdateAuthorizationState -> onAuthorizationState(obj.authorizationState)
-            is TdApi.UpdateNewChat -> synchronized(lock) { chats[obj.chat.id] = obj.chat; publishChats() }
+            is TdApi.UpdateNewChat -> synchronized(lock) {
+                chats[obj.chat.id] = obj.chat
+                if (obj.chat.positions.any { it.list is TdApi.ChatListMain && it.isPinned }) pinnedChatIds.add(obj.chat.id)
+                publishChats()
+            }
+            is TdApi.UpdateChatPosition -> synchronized(lock) {
+                if (obj.position.list is TdApi.ChatListMain) {
+                    if (obj.position.isPinned) pinnedChatIds.add(obj.chatId) else pinnedChatIds.remove(obj.chatId)
+                    publishChats()
+                }
+            }
             is TdApi.UpdateChatTitle -> synchronized(lock) { chats[obj.chatId]?.title = obj.title; publishChats() }
             is TdApi.UpdateChatLastMessage -> synchronized(lock) {
                 chats[obj.chatId]?.let { chat -> chat.lastMessage = obj.lastMessage }
@@ -348,6 +360,20 @@ internal class TelegramSession private constructor(private val context: Context)
         send(TdApi.LoadChats(TdApi.ChatListMain(), 100))
     }
 
+    fun togglePinned(chatId: Long) {
+        val shouldPin = synchronized(lock) { chatId !in pinnedChatIds }
+        send(TdApi.ToggleChatIsPinned(TdApi.ChatListMain(), chatId, shouldPin)) { result ->
+            if (result is TdApi.Ok) synchronized(lock) {
+                if (shouldPin) pinnedChatIds.add(chatId) else pinnedChatIds.remove(chatId)
+                publishChats()
+            }
+        }
+    }
+
+    fun markChatUnread(chatId: Long) {
+        send(TdApi.ToggleChatIsMarkedAsUnread(chatId, true))
+    }
+
     fun logOut() { send(TdApi.LogOut()) }
 
     private fun loadChats() {
@@ -438,8 +464,15 @@ internal class TelegramSession private constructor(private val context: Context)
     private fun publishChats() {
         val snapshot = chats.values.map { chat ->
             val last = chat.lastMessage
-            TelegramChat(chat.id, chat.title ?: "", last?.let { contentText(it.content) } ?: "Sem mensagens", chat.unreadCount, last?.date ?: 0)
-        }.sortedWith(compareByDescending<TelegramChat> { it.date }.thenBy { it.title.lowercase() })
+            TelegramChat(
+                chat.id,
+                chat.title ?: "",
+                last?.let { contentText(it.content) } ?: "Sem mensagens",
+                chat.unreadCount,
+                last?.date ?: 0,
+                chat.id in pinnedChatIds
+            )
+        }.sortedWith(compareByDescending<TelegramChat> { it.isPinned }.thenByDescending { it.date }.thenBy { it.title.lowercase() })
         _state.update { it.copy(chats = snapshot) }
     }
 
