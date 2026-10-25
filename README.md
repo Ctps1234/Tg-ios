@@ -5,7 +5,7 @@ Cliente Android nativo em Kotlin/Jetpack Compose, usando TDLib para falar com a 
 ## Funcionalidades já conectadas
 
 - Autenticação de usuário por número de telefone, código, senha de duas etapas e etapas de e-mail/cadastro solicitadas pela conta.
-- Lista de conversas e histórico recente por chat, com paginação para mensagens mais antigas, fixar/desafixar conversas, marcar como não lida, edição/exclusão de mensagens enviadas e atualizações em tempo real do TDLib.
+- Lista de conversas e histórico recente por chat, com paginação para mensagens mais antigas, fixar/desafixar conversas, marcar como não lida, respostas, edição/exclusão de mensagens enviadas e atualizações em tempo real do TDLib.
 - Envio de mensagens de texto, fotos da galeria (até 10 MB) e arquivos (até 2 GB), com legenda opcional.
 - Recebimento de fotos, vídeos, documentos, áudios, mensagens de voz e animações; download sob demanda com progresso, prévia de fotos e abertura de arquivos por outro app.
 - Pesquisa local de chats e pesquisa global de mensagens, com abertura da conversa no ponto do resultado.

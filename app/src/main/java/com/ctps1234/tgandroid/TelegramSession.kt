@@ -42,6 +42,7 @@ internal data class TelegramMessage(
     val text: String,
     val outgoing: Boolean,
     val date: Int,
+    val isText: Boolean = false,
     val fileId: Int? = null,
     val fileName: String? = null,
     val mediaType: String? = null,
@@ -280,10 +281,10 @@ internal class TelegramSession private constructor(private val context: Context)
         _state.update { it.copy(activeChatId = null, loadingChatId = null, error = null) }
     }
 
-    fun sendText(chatId: Long, text: String) {
+    fun sendText(chatId: Long, text: String, replyToMessageId: Long? = null) {
         if (text.isBlank()) return
         val content = TdApi.InputMessageText(TdApi.FormattedText(text.trim(), emptyArray()), null, true)
-        send(TdApi.SendMessage(chatId, null, null, null, null, content)) { result ->
+        send(TdApi.SendMessage(chatId, null, replyToMessageId, null, null, content)) { result ->
             if (result is TdApi.Error) setError(result.message)
         }
     }
@@ -298,7 +299,7 @@ internal class TelegramSession private constructor(private val context: Context)
         send(TdApi.EditMessageText(chatId, messageId, null, content))
     }
 
-    fun sendPhoto(chatId: Long, file: File, caption: String) {
+    fun sendPhoto(chatId: Long, file: File, caption: String, replyToMessageId: Long? = null) {
         if (!file.isFile) { setError("A foto selecionada não está disponível."); return }
         val captionText = caption.trim().takeIf { it.isNotEmpty() }?.let { TdApi.FormattedText(it, emptyArray()) }
         val inputPhoto = TdApi.InputPhoto().apply {
@@ -315,10 +316,10 @@ internal class TelegramSession private constructor(private val context: Context)
             selfDestructType = null
             hasSpoiler = false
         }
-        send(TdApi.SendMessage(chatId, null, null, null, null, photo))
+        send(TdApi.SendMessage(chatId, null, replyToMessageId, null, null, photo))
     }
 
-    fun sendDocument(chatId: Long, file: File, caption: String) {
+    fun sendDocument(chatId: Long, file: File, caption: String, replyToMessageId: Long? = null) {
         if (!file.isFile) { setError("O arquivo selecionado não está disponível."); return }
         val captionText = caption.trim().takeIf { it.isNotEmpty() }?.let { TdApi.FormattedText(it, emptyArray()) }
         val inputDocument = TdApi.InputDocument().apply {
@@ -330,7 +331,7 @@ internal class TelegramSession private constructor(private val context: Context)
             this.document = inputDocument
             this.caption = captionText
         }
-        send(TdApi.SendMessage(chatId, null, null, null, null, document))
+        send(TdApi.SendMessage(chatId, null, replyToMessageId, null, null, document))
     }
 
     fun searchMessages(query: String) {
@@ -403,6 +404,7 @@ internal class TelegramSession private constructor(private val context: Context)
             text = contentText(message.content),
             outgoing = message.isOutgoing,
             date = message.date,
+            isText = message.content is TdApi.MessageText,
             fileId = attachment?.first?.id,
             fileName = attachment?.second,
             mediaType = attachment?.third,

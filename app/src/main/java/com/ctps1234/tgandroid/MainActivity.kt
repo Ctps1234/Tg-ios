@@ -145,9 +145,9 @@ private fun TelegramApp(session: TelegramSession) {
                         canLoadOlder = state.canLoadOlderByChat[activeId] == true,
                         error = state.error,
                         onBack = { session.closeChat() },
-                        onSend = { session.sendText(activeId, it) },
-                        onSendPhoto = { file, caption -> session.sendPhoto(activeId, file, caption) },
-                        onSendDocument = { file, caption -> session.sendDocument(activeId, file, caption) },
+                        onSend = { text, replyTo -> session.sendText(activeId, text, replyTo) },
+                        onSendPhoto = { file, caption, replyTo -> session.sendPhoto(activeId, file, caption, replyTo) },
+                        onSendDocument = { file, caption, replyTo -> session.sendDocument(activeId, file, caption, replyTo) },
                         onDownloadAttachment = { session.downloadAttachment(it) },
                         onLoadOlder = { session.loadOlderMessages(activeId) },
                         onDeleteMessage = { session.deleteMessage(activeId, it) },
@@ -396,9 +396,9 @@ private fun ConversationScreen(
     canLoadOlder: Boolean,
     error: String?,
     onBack: () -> Unit,
-    onSend: (String) -> Unit,
-    onSendPhoto: (File, String) -> Unit,
-    onSendDocument: (File, String) -> Unit,
+    onSend: (String, Long?) -> Unit,
+    onSendPhoto: (File, String, Long?) -> Unit,
+    onSendDocument: (File, String, Long?) -> Unit,
     onDownloadAttachment: (Int) -> Unit,
     onLoadOlder: () -> Unit,
     onDeleteMessage: (Long) -> Unit,
@@ -409,6 +409,7 @@ private fun ConversationScreen(
     var preparingAttachment by remember { mutableStateOf(false) }
     var attachmentError by remember(title) { mutableStateOf<String?>(null) }
     var messageActions by remember { mutableStateOf<TelegramMessage?>(null) }
+    var replyToMessage by remember { mutableStateOf<TelegramMessage?>(null) }
     var messageToDelete by remember { mutableStateOf<TelegramMessage?>(null) }
     var messageToEdit by remember { mutableStateOf<TelegramMessage?>(null) }
     var editedText by remember { mutableStateOf("") }
@@ -422,6 +423,7 @@ private fun ConversationScreen(
             preparingAttachment = true
             attachmentError = null
             val caption = draft
+            val replyId = replyToMessage?.id
             try {
                 val file = withContext(Dispatchers.IO) {
                     copyPickedUri(
@@ -430,8 +432,9 @@ private fun ConversationScreen(
                         maxBytes = if (isPhoto) MAX_PHOTO_BYTES else MAX_DOCUMENT_BYTES
                     )
                 }
-                if (isPhoto) onSendPhoto(file, caption) else onSendDocument(file, caption)
+                if (isPhoto) onSendPhoto(file, caption, replyId) else onSendDocument(file, caption, replyId)
                 draft = ""
+                replyToMessage = null
             } catch (failure: Exception) {
                 attachmentError = failure.message ?: "Não foi possível preparar o anexo."
             } finally {
@@ -459,6 +462,15 @@ private fun ConversationScreen(
         },
         bottomBar = {
             Column(Modifier.fillMaxWidth().background(Color(0xFFF8F8F8))) {
+                replyToMessage?.let { target ->
+                    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Respondendo a ${if (target.outgoing) "você" else title}", color = TelegramBlue, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            Text(target.text, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        TextButton(onClick = { replyToMessage = null }) { Text("Cancelar") }
+                    }
+                }
                 if (preparingAttachment) Text("Preparando anexo…", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(start = 18.dp, top = 6.dp))
                 attachmentError?.let { Text(it, color = Color(0xFFB3261E), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 5.dp)) }
                 Row(Modifier.fillMaxWidth().imePadding().padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -473,9 +485,9 @@ private fun ConversationScreen(
                         shape = RoundedCornerShape(24.dp),
                         maxLines = 5,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                        keyboardActions = KeyboardActions(onSend = { if (draft.isNotBlank() && !preparingAttachment) { onSend(draft); draft = "" } })
+                        keyboardActions = KeyboardActions(onSend = { if (draft.isNotBlank() && !preparingAttachment) { onSend(draft, replyToMessage?.id); draft = ""; replyToMessage = null } })
                     )
-                    IconButton(onClick = { if (draft.isNotBlank() && !preparingAttachment) { onSend(draft); draft = "" } }, enabled = draft.isNotBlank() && !preparingAttachment) {
+                    IconButton(onClick = { if (draft.isNotBlank() && !preparingAttachment) { onSend(draft, replyToMessage?.id); draft = ""; replyToMessage = null } }, enabled = draft.isNotBlank() && !preparingAttachment) {
                         Icon(Icons.Default.Send, "Enviar", tint = if (draft.isNotBlank()) TelegramBlue else Muted)
                     }
                 }
@@ -511,7 +523,7 @@ private fun ConversationScreen(
                                 shape = RoundedCornerShape(16.dp),
                                 shadowElevation = 1.dp,
                                 modifier = Modifier.padding(vertical = 3.dp).pointerInput(message.id, message.outgoing) {
-                                    detectTapGestures(onLongPress = { if (message.outgoing) messageActions = message })
+                                    detectTapGestures(onLongPress = { messageActions = message })
                                 }
                             ) {
                                 Column(Modifier.widthIn(max = 300.dp).padding(horizontal = 12.dp, vertical = 8.dp)) {
@@ -560,20 +572,26 @@ private fun ConversationScreen(
     messageActions?.let { message ->
         AlertDialog(
             onDismissRequest = { messageActions = null },
-            title = { Text("Mensagem enviada") },
+            title = { Text(if (message.outgoing) "Mensagem enviada" else "Mensagem recebida") },
             text = {
                 Column {
-                    if (message.mediaType == null) {
+                    TextButton(onClick = {
+                        replyToMessage = message
+                        messageActions = null
+                    }, modifier = Modifier.fillMaxWidth()) { Text("Responder") }
+                    if (message.outgoing && message.isText) {
                         TextButton(onClick = {
                             editedText = message.text
                             messageToEdit = message
                             messageActions = null
                         }, modifier = Modifier.fillMaxWidth()) { Text("Editar mensagem") }
                     }
-                    TextButton(onClick = {
-                        messageToDelete = message
-                        messageActions = null
-                    }, modifier = Modifier.fillMaxWidth()) { Text("Apagar mensagem", color = Color(0xFFB3261E)) }
+                    if (message.outgoing) {
+                        TextButton(onClick = {
+                            messageToDelete = message
+                            messageActions = null
+                        }, modifier = Modifier.fillMaxWidth()) { Text("Apagar mensagem", color = Color(0xFFB3261E)) }
+                    }
                 }
             },
             confirmButton = { TextButton(onClick = { messageActions = null }) { Text("Cancelar") } }
