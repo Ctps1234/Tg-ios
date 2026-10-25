@@ -336,6 +336,10 @@ internal class TelegramSession private constructor(private val context: Context)
         send(TdApi.EditMessageText(chatId, messageId, null, content))
     }
 
+    fun forwardMessage(fromChatId: Long, messageId: Long, toChatId: Long) {
+        send(TdApi.ForwardMessages(toChatId, null, fromChatId, longArrayOf(messageId), null, false, false))
+    }
+
     fun sendPhoto(chatId: Long, file: File, caption: String, replyToMessageId: Long? = null) {
         if (!file.isFile) { setError("A foto selecionada não está disponível."); return }
         val captionText = caption.trim().takeIf { it.isNotEmpty() }?.let { TdApi.FormattedText(it, emptyArray()) }

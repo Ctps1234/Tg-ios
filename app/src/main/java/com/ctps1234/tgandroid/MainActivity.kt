@@ -164,6 +164,7 @@ private fun TelegramApp(session: TelegramSession) {
                     val messages = state.messagesByChat[activeId].orEmpty()
                     ConversationScreen(
                         title = chat?.title ?: "Telegram",
+                        chats = state.chats,
                         messages = messages,
                         isLoading = state.loadingChatId == activeId,
                         isLoadingOlder = state.loadingOlderChatId == activeId,
@@ -176,7 +177,8 @@ private fun TelegramApp(session: TelegramSession) {
                         onDownloadAttachment = { session.downloadAttachment(it) },
                         onLoadOlder = { session.loadOlderMessages(activeId) },
                         onDeleteMessage = { session.deleteMessage(activeId, it) },
-                        onEditMessage = { messageId, text -> session.editMessageText(activeId, messageId, text) }
+                        onEditMessage = { messageId, text -> session.editMessageText(activeId, messageId, text) },
+                        onForwardMessage = { messageId, targetChatId -> session.forwardMessage(activeId, messageId, targetChatId) }
                     )
                 }
             }
@@ -435,6 +437,7 @@ private fun ChatRow(
 @Composable
 private fun ConversationScreen(
     title: String,
+    chats: List<TelegramChat>,
     messages: List<TelegramMessage>,
     isLoading: Boolean,
     isLoadingOlder: Boolean,
@@ -447,7 +450,8 @@ private fun ConversationScreen(
     onDownloadAttachment: (Int) -> Unit,
     onLoadOlder: () -> Unit,
     onDeleteMessage: (Long) -> Unit,
-    onEditMessage: (Long, String) -> Unit
+    onEditMessage: (Long, String) -> Unit,
+    onForwardMessage: (Long, Long) -> Unit
 ) {
     var draft by remember(title) { mutableStateOf("") }
     var attachmentDialog by remember { mutableStateOf(false) }
@@ -457,6 +461,8 @@ private fun ConversationScreen(
     var replyToMessage by remember { mutableStateOf<TelegramMessage?>(null) }
     var messageToDelete by remember { mutableStateOf<TelegramMessage?>(null) }
     var messageToEdit by remember { mutableStateOf<TelegramMessage?>(null) }
+    var messageToForward by remember { mutableStateOf<TelegramMessage?>(null) }
+    var forwardSearch by remember { mutableStateOf("") }
     var editedText by remember { mutableStateOf("") }
     var cameraFile by remember { mutableStateOf<File?>(null) }
     val context = LocalContext.current
@@ -661,6 +667,11 @@ private fun ConversationScreen(
                         replyToMessage = message
                         messageActions = null
                     }, modifier = Modifier.fillMaxWidth()) { Text("Responder") }
+                    TextButton(onClick = {
+                        messageToForward = message
+                        forwardSearch = ""
+                        messageActions = null
+                    }, modifier = Modifier.fillMaxWidth()) { Text("Encaminhar") }
                     if (message.outgoing && message.isText) {
                         TextButton(onClick = {
                             editedText = message.text
@@ -698,6 +709,44 @@ private fun ConversationScreen(
                 }, enabled = editedText.isNotBlank()) { Text("Salvar") }
             },
             dismissButton = { TextButton(onClick = { messageToEdit = null }) { Text("Cancelar") } }
+        )
+    }
+    messageToForward?.let { message ->
+        val matchingChats = chats.filter { it.title.contains(forwardSearch, ignoreCase = true) }
+        AlertDialog(
+            onDismissRequest = { messageToForward = null },
+            title = { Text("Encaminhar para") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = forwardSearch,
+                        onValueChange = { forwardSearch = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Pesquisar conversa") },
+                        singleLine = true
+                    )
+                    LazyColumn(Modifier.heightIn(max = 300.dp)) {
+                        items(matchingChats, key = { it.id }) { destination ->
+                            Row(
+                                Modifier.fillMaxWidth().clickable {
+                                    onForwardMessage(message.id, destination.id)
+                                    messageToForward = null
+                                }.padding(vertical = 12.dp, horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(Modifier.size(36.dp).background(avatarColor(destination.title), CircleShape), contentAlignment = Alignment.Center) {
+                                    Text(destination.title.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.SemiBold)
+                                }
+                                Spacer(Modifier.width(10.dp))
+                                Text(destination.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                    if (matchingChats.isEmpty()) Text("Nenhuma conversa encontrada", color = Muted, modifier = Modifier.padding(8.dp))
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { messageToForward = null }) { Text("Cancelar") } }
         )
     }
     messageToDelete?.let { message ->
