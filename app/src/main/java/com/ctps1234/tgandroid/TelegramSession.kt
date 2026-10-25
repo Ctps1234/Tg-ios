@@ -284,10 +284,13 @@ internal class TelegramSession private constructor(private val context: Context)
     fun sendText(chatId: Long, text: String, replyToMessageId: Long? = null) {
         if (text.isBlank()) return
         val content = TdApi.InputMessageText(TdApi.FormattedText(text.trim(), emptyArray()), null, true)
-        send(TdApi.SendMessage(chatId, null, replyToMessageId, null, null, content)) { result ->
+        send(TdApi.SendMessage(chatId, null, createReplyTo(replyToMessageId), null, null, content)) { result ->
             if (result is TdApi.Error) setError(result.message)
         }
     }
+
+    private fun createReplyTo(messageId: Long?): TdApi.InputMessageReplyTo? =
+        messageId?.let { TdApi.InputMessageReplyToMessage(it, null, 0, "") }
 
     fun deleteMessage(chatId: Long, messageId: Long) {
         send(TdApi.DeleteMessages(chatId, longArrayOf(messageId), true))
@@ -316,7 +319,7 @@ internal class TelegramSession private constructor(private val context: Context)
             selfDestructType = null
             hasSpoiler = false
         }
-        send(TdApi.SendMessage(chatId, null, replyToMessageId, null, null, photo))
+        send(TdApi.SendMessage(chatId, null, createReplyTo(replyToMessageId), null, null, photo))
     }
 
     fun sendDocument(chatId: Long, file: File, caption: String, replyToMessageId: Long? = null) {
@@ -331,7 +334,7 @@ internal class TelegramSession private constructor(private val context: Context)
             this.document = inputDocument
             this.caption = captionText
         }
-        send(TdApi.SendMessage(chatId, null, replyToMessageId, null, null, document))
+        send(TdApi.SendMessage(chatId, null, createReplyTo(replyToMessageId), null, null, document))
     }
 
     fun searchMessages(query: String) {
