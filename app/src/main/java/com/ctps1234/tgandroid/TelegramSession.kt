@@ -46,6 +46,8 @@ internal data class TelegramUiState(
     val messagesByChat: Map<Long, List<TelegramMessage>> = emptyMap(),
     val activeChatId: Long? = null,
     val loadingChatId: Long? = null,
+    val loadingOlderChatId: Long? = null,
+    val canLoadOlderByChat: Map<Long, Boolean> = emptyMap(),
     val error: String? = null,
     val status: String = ""
 )
@@ -190,17 +192,56 @@ internal class TelegramSession private constructor(private val context: Context)
     fun openChat(chatId: Long) {
         send(TdApi.OpenChat(chatId))
         synchronized(lock) { messages[chatId] = mutableListOf() }
-        _state.update { it.copy(activeChatId = chatId, loadingChatId = chatId, messagesByChat = it.messagesByChat + (chatId to emptyList()), error = null) }
+        _state.update {
+            it.copy(
+                activeChatId = chatId,
+                loadingChatId = chatId,
+                loadingOlderChatId = null,
+                canLoadOlderByChat = it.canLoadOlderByChat + (chatId to true),
+                messagesByChat = it.messagesByChat + (chatId to emptyList()),
+                error = null
+            )
+        }
         send(TdApi.GetChatHistory(chatId, 0, 0, 50, false)) { result ->
             if (result is TdApi.Messages) {
                 synchronized(lock) {
-                    messages[chatId] = result.messages.map(::toMessage).sortedBy { it.date }.toMutableList()
+                    messages[chatId] = mergeMessages(messages[chatId].orEmpty(), result.messages.map(::toMessage))
                     publishMessages(chatId)
                 }
+                _state.update { it.copy(canLoadOlderByChat = it.canLoadOlderByChat + (chatId to (result.messages.size >= 50))) }
             }
             _state.update { it.copy(loadingChatId = null) }
         }
     }
+
+    fun loadOlderMessages(chatId: Long) {
+        val currentState = _state.value
+        if (currentState.loadingOlderChatId == chatId || currentState.canLoadOlderByChat[chatId] == false) return
+        val firstId = synchronized(lock) { messages[chatId]?.minByOrNull { it.date }?.id }
+        if (firstId == null) {
+            _state.update { it.copy(canLoadOlderByChat = it.canLoadOlderByChat + (chatId to false)) }
+            return
+        }
+        _state.update { it.copy(loadingOlderChatId = chatId) }
+        send(TdApi.GetChatHistory(chatId, firstId, 0, 50, false)) { result ->
+            if (result is TdApi.Messages) {
+                var loadedAnyNew = false
+                synchronized(lock) {
+                    val existing = messages[chatId].orEmpty()
+                    val merged = mergeMessages(existing, result.messages.map(::toMessage))
+                    loadedAnyNew = merged.size > existing.size
+                    messages[chatId] = merged
+                    publishMessages(chatId)
+                }
+                val canContinue = result.messages.size >= 50 && loadedAnyNew
+                _state.update { it.copy(canLoadOlderByChat = it.canLoadOlderByChat + (chatId to canContinue)) }
+            }
+            _state.update { it.copy(loadingOlderChatId = null) }
+        }
+    }
+
+    private fun mergeMessages(existing: List<TelegramMessage>, incoming: List<TelegramMessage>): MutableList<TelegramMessage> =
+        (existing.associateBy { it.id } + incoming.associateBy { it.id }).values.sortedBy { it.date }.toMutableList()
 
     fun closeChat() {
         _state.value.activeChatId?.let { send(TdApi.CloseChat(it)) }
@@ -213,6 +254,16 @@ internal class TelegramSession private constructor(private val context: Context)
         send(TdApi.SendMessage(chatId, null, null, null, null, content)) { result ->
             if (result is TdApi.Error) setError(result.message)
         }
+    }
+
+    fun deleteMessage(chatId: Long, messageId: Long) {
+        send(TdApi.DeleteMessages(chatId, longArrayOf(messageId), true))
+    }
+
+    fun editMessageText(chatId: Long, messageId: Long, text: String) {
+        if (text.isBlank()) { setError("A mensagem não pode ficar vazia."); return }
+        val content = TdApi.InputMessageText(TdApi.FormattedText(text.trim(), emptyArray()), null, true)
+        send(TdApi.EditMessageText(chatId, messageId, null, content))
     }
 
     fun sendPhoto(chatId: Long, file: File, caption: String) {

@@ -15,6 +15,8 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -129,12 +131,17 @@ private fun TelegramApp(session: TelegramSession) {
                         title = chat?.title ?: "Telegram",
                         messages = messages,
                         isLoading = state.loadingChatId == activeId,
+                        isLoadingOlder = state.loadingOlderChatId == activeId,
+                        canLoadOlder = state.canLoadOlderByChat[activeId] == true,
                         error = state.error,
                         onBack = { session.closeChat() },
                         onSend = { session.sendText(activeId, it) },
                         onSendPhoto = { file, caption -> session.sendPhoto(activeId, file, caption) },
                         onSendDocument = { file, caption -> session.sendDocument(activeId, file, caption) },
-                        onDownloadAttachment = { session.downloadAttachment(it) }
+                        onDownloadAttachment = { session.downloadAttachment(it) },
+                        onLoadOlder = { session.loadOlderMessages(activeId) },
+                        onDeleteMessage = { session.deleteMessage(activeId, it) },
+                        onEditMessage = { messageId, text -> session.editMessageText(activeId, messageId, text) }
                     )
                 }
             }
@@ -309,17 +316,26 @@ private fun ConversationScreen(
     title: String,
     messages: List<TelegramMessage>,
     isLoading: Boolean,
+    isLoadingOlder: Boolean,
+    canLoadOlder: Boolean,
     error: String?,
     onBack: () -> Unit,
     onSend: (String) -> Unit,
     onSendPhoto: (File, String) -> Unit,
     onSendDocument: (File, String) -> Unit,
-    onDownloadAttachment: (Int) -> Unit
+    onDownloadAttachment: (Int) -> Unit,
+    onLoadOlder: () -> Unit,
+    onDeleteMessage: (Long) -> Unit,
+    onEditMessage: (Long, String) -> Unit
 ) {
     var draft by remember(title) { mutableStateOf("") }
     var attachmentDialog by remember { mutableStateOf(false) }
     var preparingAttachment by remember { mutableStateOf(false) }
     var attachmentError by remember(title) { mutableStateOf<String?>(null) }
+    var messageActions by remember { mutableStateOf<TelegramMessage?>(null) }
+    var messageToDelete by remember { mutableStateOf<TelegramMessage?>(null) }
+    var messageToEdit by remember { mutableStateOf<TelegramMessage?>(null) }
+    var editedText by remember { mutableStateOf("") }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val messageListState = rememberLazyListState()
@@ -402,9 +418,26 @@ private fun ConversationScreen(
                 }
             } else {
                 LazyColumn(state = messageListState, modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp), reverseLayout = false, verticalArrangement = Arrangement.Bottom) {
+                    if (canLoadOlder || isLoadingOlder) {
+                        item(key = "load-older") {
+                            TextButton(onClick = onLoadOlder, enabled = !isLoadingOlder, modifier = Modifier.fillMaxWidth()) {
+                                if (isLoadingOlder) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                else Icon(Icons.Default.CloudDownload, null, modifier = Modifier.size(17.dp))
+                                Spacer(Modifier.width(7.dp))
+                                Text(if (isLoadingOlder) "Carregando mensagens antigas…" else "Carregar mensagens anteriores")
+                            }
+                        }
+                    }
                     items(messages, key = { it.id }) { message ->
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.outgoing) Arrangement.End else Arrangement.Start) {
-                            Surface(color = if (message.outgoing) Color(0xFFD9FDD3) else Color.White, shape = RoundedCornerShape(16.dp), shadowElevation = 1.dp, modifier = Modifier.padding(vertical = 3.dp)) {
+                            Surface(
+                                color = if (message.outgoing) Color(0xFFD9FDD3) else Color.White,
+                                shape = RoundedCornerShape(16.dp),
+                                shadowElevation = 1.dp,
+                                modifier = Modifier.padding(vertical = 3.dp).pointerInput(message.id, message.outgoing) {
+                                    detectTapGestures(onLongPress = { if (message.outgoing) messageActions = message })
+                                }
+                            ) {
                                 Column(Modifier.widthIn(max = 300.dp).padding(horizontal = 12.dp, vertical = 8.dp)) {
                                     if (message.fileId != null) {
                                         ReceivedAttachment(message, onDownloadAttachment)
@@ -446,6 +479,63 @@ private fun ConversationScreen(
             },
             confirmButton = {},
             dismissButton = { TextButton(onClick = { attachmentDialog = false }) { Text("Cancelar") } }
+        )
+    }
+    messageActions?.let { message ->
+        AlertDialog(
+            onDismissRequest = { messageActions = null },
+            title = { Text("Mensagem enviada") },
+            text = {
+                Column {
+                    if (message.mediaType == null) {
+                        TextButton(onClick = {
+                            editedText = message.text
+                            messageToEdit = message
+                            messageActions = null
+                        }, modifier = Modifier.fillMaxWidth()) { Text("Editar mensagem") }
+                    }
+                    TextButton(onClick = {
+                        messageToDelete = message
+                        messageActions = null
+                    }, modifier = Modifier.fillMaxWidth()) { Text("Apagar mensagem", color = Color(0xFFB3261E)) }
+                }
+            },
+            confirmButton = { TextButton(onClick = { messageActions = null }) { Text("Cancelar") } }
+        )
+    }
+    messageToEdit?.let { message ->
+        AlertDialog(
+            onDismissRequest = { messageToEdit = null },
+            title = { Text("Editar mensagem") },
+            text = {
+                OutlinedTextField(
+                    value = editedText,
+                    onValueChange = { editedText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 6
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onEditMessage(message.id, editedText)
+                    messageToEdit = null
+                }, enabled = editedText.isNotBlank()) { Text("Salvar") }
+            },
+            dismissButton = { TextButton(onClick = { messageToEdit = null }) { Text("Cancelar") } }
+        )
+    }
+    messageToDelete?.let { message ->
+        AlertDialog(
+            onDismissRequest = { messageToDelete = null },
+            title = { Text("Apagar mensagem?") },
+            text = { Text("A mensagem será apagada para todos, se o Telegram permitir.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeleteMessage(message.id)
+                    messageToDelete = null
+                }) { Text("Apagar", color = Color(0xFFB3261E)) }
+            },
+            dismissButton = { TextButton(onClick = { messageToDelete = null }) { Text("Cancelar") } }
         )
     }
 }
