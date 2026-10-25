@@ -21,6 +21,7 @@ import org.drinkless.tdlib.Client
 import org.drinkless.tdlib.TdApi
 import java.io.File
 import java.security.KeyStore
+import java.util.concurrent.atomic.AtomicInteger
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -425,11 +426,24 @@ internal class TelegramSession private constructor(private val context: Context)
         _state.update { it.copy(loadingContacts = true) }
         send(TdApi.GetContacts()) { result ->
             if (result is TdApi.Users) {
-                val contacts = result.users.map { user ->
-                    val displayName = listOf(user.firstName, user.lastName).filter { it.isNotBlank() }.joinToString(" ")
-                    TelegramContact(user.id, displayName.ifBlank { "Contato" })
-                }.sortedBy { it.name.lowercase() }
-                _state.update { it.copy(contacts = contacts, loadingContacts = false) }
+                val userIds = result.userIds
+                if (userIds.isEmpty()) {
+                    _state.update { it.copy(contacts = emptyList(), loadingContacts = false) }
+                } else {
+                    val remaining = AtomicInteger(userIds.size)
+                    userIds.forEach { userId ->
+                        send(TdApi.GetUser(userId)) { userResult ->
+                            if (userResult is TdApi.User) {
+                                val displayName = listOf(userResult.firstName, userResult.lastName).filter { it.isNotBlank() }.joinToString(" ")
+                                val contact = TelegramContact(userResult.id, displayName.ifBlank { "Contato" })
+                                _state.update { current ->
+                                    current.copy(contacts = (current.contacts.filterNot { it.userId == contact.userId } + contact).sortedBy { it.name.lowercase() })
+                                }
+                            }
+                            if (remaining.decrementAndGet() == 0) _state.update { it.copy(loadingContacts = false) }
+                        }
+                    }
+                }
             } else {
                 contactsRequested = false
                 _state.update { it.copy(loadingContacts = false) }
