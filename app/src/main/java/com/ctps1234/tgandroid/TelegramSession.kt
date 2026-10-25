@@ -28,6 +28,14 @@ internal data class TelegramChat(
     val date: Int
 )
 
+internal data class TelegramSearchResult(
+    val chatId: Long,
+    val chatTitle: String,
+    val messageId: Long,
+    val text: String,
+    val date: Int
+)
+
 internal data class TelegramMessage(
     val id: Long,
     val text: String,
@@ -44,6 +52,9 @@ internal data class TelegramUiState(
     val authStep: AuthStep = AuthStep.CONFIG,
     val chats: List<TelegramChat> = emptyList(),
     val messagesByChat: Map<Long, List<TelegramMessage>> = emptyMap(),
+    val messageSearchResults: List<TelegramSearchResult> = emptyList(),
+    val searchingMessages: Boolean = false,
+    val messageSearchCompleted: Boolean = false,
     val activeChatId: Long? = null,
     val loadingChatId: Long? = null,
     val loadingOlderChatId: Long? = null,
@@ -118,7 +129,12 @@ internal class TelegramSession private constructor(private val context: Context)
                 chats[obj.chatId]?.unreadCount = obj.unreadCount
                 publishChats()
             }
-            is TdApi.UpdateNewMessage -> addMessage(obj.message)
+            is TdApi.UpdateNewMessage -> {
+                addMessage(obj.message)
+                if (_state.value.activeChatId == obj.message.chatId && !obj.message.isOutgoing) {
+                    send(TdApi.ViewMessages(obj.message.chatId, 0, longArrayOf(obj.message.id), true))
+                }
+            }
             is TdApi.UpdateMessageSendSucceeded -> addMessage(obj.message)
             is TdApi.UpdateFile -> updateDownloadedFile(obj.file)
             is TdApi.UpdateMessageContent -> synchronized(lock) {
@@ -189,7 +205,7 @@ internal class TelegramSession private constructor(private val context: Context)
     fun submitEmailCode(code: String) = send(TdApi.CheckAuthenticationEmailCode(TdApi.EmailAddressAuthenticationCode(code.trim())))
     fun submitRegistration(firstName: String, lastName: String) = send(TdApi.RegisterUser(firstName.trim(), lastName.trim(), false))
 
-    fun openChat(chatId: Long) {
+    fun openChat(chatId: Long, aroundMessageId: Long = 0) {
         send(TdApi.OpenChat(chatId))
         synchronized(lock) { messages[chatId] = mutableListOf() }
         _state.update {
@@ -202,11 +218,14 @@ internal class TelegramSession private constructor(private val context: Context)
                 error = null
             )
         }
-        send(TdApi.GetChatHistory(chatId, 0, 0, 50, false)) { result ->
+        send(TdApi.GetChatHistory(chatId, aroundMessageId, 0, 50, false)) { result ->
             if (result is TdApi.Messages) {
                 synchronized(lock) {
                     messages[chatId] = mergeMessages(messages[chatId].orEmpty(), result.messages.map(::toMessage))
                     publishMessages(chatId)
+                }
+                if (result.messages.isNotEmpty()) {
+                    send(TdApi.ViewMessages(chatId, 0, result.messages.map { it.id }.toLongArray(), true))
                 }
                 _state.update { it.copy(canLoadOlderByChat = it.canLoadOlderByChat + (chatId to (result.messages.size >= 50))) }
             }
@@ -299,6 +318,27 @@ internal class TelegramSession private constructor(private val context: Context)
             this.caption = captionText
         }
         send(TdApi.SendMessage(chatId, null, null, null, null, document))
+    }
+
+    fun searchMessages(query: String) {
+        val term = query.trim()
+        if (term.isBlank()) {
+            _state.update { it.copy(messageSearchResults = emptyList(), searchingMessages = false, messageSearchCompleted = false) }
+            return
+        }
+        _state.update { it.copy(messageSearchResults = emptyList(), searchingMessages = true, messageSearchCompleted = false, error = null) }
+        send(TdApi.SearchMessages(TdApi.ChatListMain(), term, 0, 0, 0, 50, null, 0, 0)) { result ->
+            val results = if (result is TdApi.Messages) result.messages.map { message ->
+                TelegramSearchResult(
+                    chatId = message.chatId,
+                    chatTitle = synchronized(lock) { chats[message.chatId]?.title }.orEmpty().ifBlank { "Telegram" },
+                    messageId = message.id,
+                    text = contentText(message.content),
+                    date = message.date
+                )
+            } else emptyList()
+            _state.update { it.copy(messageSearchResults = results, searchingMessages = false, messageSearchCompleted = true) }
+        }
     }
 
     fun loadMoreChats() {

@@ -118,7 +118,12 @@ private fun TelegramApp(session: TelegramSession) {
                     ChatListScreen(
                         state = state,
                         search = search,
-                        onSearch = { search = it },
+                        searchResults = state.messageSearchResults,
+                        searchingMessages = state.searchingMessages,
+                        messageSearchCompleted = state.messageSearchCompleted,
+                        onSearch = { search = it; session.searchMessages("") },
+                        onSearchMessages = { session.searchMessages(search) },
+                        onOpenSearchResult = { session.openChat(it.chatId, it.messageId) },
                         onOpen = { session.openChat(it) },
                         onLoadMore = { session.loadMoreChats() },
                         onLogout = { session.logOut() }
@@ -235,7 +240,12 @@ private fun authDescription(step: AuthStep): String = when (step) {
 private fun ChatListScreen(
     state: TelegramUiState,
     search: String,
+    searchResults: List<TelegramSearchResult>,
+    searchingMessages: Boolean,
+    messageSearchCompleted: Boolean,
     onSearch: (String) -> Unit,
+    onSearchMessages: () -> Unit,
+    onOpenSearchResult: (TelegramSearchResult) -> Unit,
     onOpen: (Long) -> Unit,
     onLoadMore: () -> Unit,
     onLogout: () -> Unit
@@ -255,10 +265,33 @@ private fun ChatListScreen(
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).background(Color.White)) {
             if (searchVisible) {
-                OutlinedTextField(search, onSearch, modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp), label = { Text("Pesquisar conversas") }, singleLine = true)
+                Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = search,
+                        onValueChange = onSearch,
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Pesquisar conversas e mensagens") },
+                        singleLine = true
+                    )
+                    TextButton(onClick = onSearchMessages, enabled = search.isNotBlank() && !searchingMessages) {
+                        Text(if (searchingMessages) "Buscando…" else "Mensagens")
+                    }
+                }
             }
             state.error?.let { Text(it, color = Color(0xFFB3261E), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontSize = 13.sp) }
-            if (state.chats.isEmpty()) {
+            if (searchingMessages || messageSearchCompleted) {
+                if (searchingMessages) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = TelegramBlue) }
+                } else if (searchResults.isEmpty()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Nenhuma mensagem encontrada.", color = Muted) }
+                } else {
+                    LazyColumn(Modifier.fillMaxSize()) {
+                        items(searchResults, key = { "${it.chatId}:${it.messageId}" }) { result ->
+                            SearchResultRow(result) { onOpenSearchResult(result) }
+                        }
+                    }
+                }
+            } else if (state.chats.isEmpty()) {
                 Column(Modifier.fillMaxSize().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                     CircularProgressIndicator(color = TelegramBlue)
                     Spacer(Modifier.height(14.dp))
@@ -283,6 +316,18 @@ private fun ChatListScreen(
             }
         }
     }
+}
+
+@Composable
+private fun SearchResultRow(result: TelegramSearchResult, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(result.chatTitle, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(if (result.date > 0) DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(result.date * 1000L)) else "", color = Muted, fontSize = 10.sp)
+        }
+        Text(result.text, color = Muted, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
+    }
+    Divider(Modifier.padding(start = 16.dp), color = Color(0xFFF0F0F0), thickness = 0.5.dp)
 }
 
 @Composable
