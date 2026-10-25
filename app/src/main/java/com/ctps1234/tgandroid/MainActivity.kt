@@ -907,7 +907,8 @@ private fun ReceivedAttachment(message: TelegramMessage, onDownload: (Int) -> Un
             TextButton(onClick = {
                 try {
                     val file = File(message.localPath)
-                    val extension = file.extension.lowercase()
+                    val extension = message.fileName?.substringAfterLast('.', "")?.takeIf { it.isNotBlank() }?.lowercase()
+                        ?: file.extension.lowercase()
                     val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "application/octet-stream"
                     val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
                     context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))

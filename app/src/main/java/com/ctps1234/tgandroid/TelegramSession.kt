@@ -519,13 +519,7 @@ internal class TelegramSession private constructor(private val context: Context)
             height = metadata.third
             supportsStreaming = true
         }
-        val content = TdApi.InputMessageVideo().apply {
-            video = inputVideo
-            caption = caption.trim()
-            showCaptionAboveMedia = false
-            selfDestructType = null
-            hasSpoiler = false
-        }
+        val content = TdApi.InputMessageVideo(inputVideo, caption.trim(), false, null, false)
         send(TdApi.SendMessage(chatId, null, createReplyTo(replyToMessageId), null, null, content))
     }
 
