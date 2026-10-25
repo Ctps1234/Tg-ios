@@ -202,8 +202,8 @@ internal class TelegramSession private constructor(private val context: Context)
 
     fun sendText(chatId: Long, text: String) {
         if (text.isBlank()) return
-        val content = TdApi.InputMessageText(TdApi.FormattedText(text.trim(), emptyArray()), false, true)
-        send(TdApi.SendMessage(chatId, 0, 0, null, null, content)) { result ->
+        val content = TdApi.InputMessageText(TdApi.FormattedText(text.trim(), emptyArray()), null, true)
+        send(TdApi.SendMessage(chatId, null, null, null, null, content)) { result ->
             if (result is TdApi.Error) setError(result.message)
         }
     }
@@ -229,7 +229,8 @@ internal class TelegramSession private constructor(private val context: Context)
         if (existing >= 0) list[existing] = converted else list.add(converted)
         list.sortBy { it.date }
         publishMessages(message.chatId)
-        chats[message.chatId]?.let { chat -> if (chat.lastMessage == null || chat.lastMessage.id <= message.id) chat.lastMessage = message }
+        chats[message.chatId]?.let { chat -> val currentLastMessage = chat.lastMessage
+            if (currentLastMessage == null || currentLastMessage.id <= message.id) chat.lastMessage = message }
         publishChats()
     }
 
@@ -264,7 +265,7 @@ internal class TelegramSession private constructor(private val context: Context)
     private fun setStep(step: AuthStep, status: String) = _state.update { it.copy(authStep = step, status = status, error = null) }
     private fun setError(error: String) = _state.update { it.copy(error = error, status = "") }
 
-    private fun send(function: TdApi.Function, onResult: ((TdApi.Object) -> Unit)? = null) {
+    private fun send(function: TdApi.Function<*>, onResult: ((TdApi.Object) -> Unit)? = null) {
         val activeClient = client
         if (activeClient == null) {
             setError("Cliente ainda não está conectado.")
