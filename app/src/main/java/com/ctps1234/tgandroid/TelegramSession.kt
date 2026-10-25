@@ -81,6 +81,7 @@ internal class TelegramSession private constructor(private val context: Context)
     private fun startClient() {
         if (client != null) return
         try {
+            cleanOldUploadCopies()
             File(context.filesDir, "tdlib").mkdirs()
             File(context.filesDir, "tdlib_files").mkdirs()
             val created = Client.create(
@@ -208,6 +209,25 @@ internal class TelegramSession private constructor(private val context: Context)
         }
     }
 
+    fun sendPhoto(chatId: Long, file: File, caption: String) {
+        if (!file.isFile) { setError("A foto selecionada não está disponível."); return }
+        val captionText = caption.trim().takeIf { it.isNotEmpty() }?.let { TdApi.FormattedText(it, emptyArray()) }
+        val photo = TdApi.InputMessagePhoto(
+            TdApi.InputFileLocal(file.absolutePath), null, IntArray(0), 0, 0,
+            captionText, false, null, false
+        )
+        send(TdApi.SendMessage(chatId, null, null, null, null, photo))
+    }
+
+    fun sendDocument(chatId: Long, file: File, caption: String) {
+        if (!file.isFile) { setError("O arquivo selecionado não está disponível."); return }
+        val captionText = caption.trim().takeIf { it.isNotEmpty() }?.let { TdApi.FormattedText(it, emptyArray()) }
+        val document = TdApi.InputMessageDocument(
+            TdApi.InputFileLocal(file.absolutePath), null, false, captionText
+        )
+        send(TdApi.SendMessage(chatId, null, null, null, null, document))
+    }
+
     fun loadMoreChats() {
         send(TdApi.LoadChats(TdApi.ChatListMain(), 100))
     }
@@ -242,7 +262,7 @@ internal class TelegramSession private constructor(private val context: Context)
         is TdApi.MessageText -> content.text.text
         is TdApi.MessagePhoto -> "📷 Foto"
         is TdApi.MessageVideo -> "▶ Vídeo"
-        is TdApi.MessageDocument -> "📎 Arquivo"
+        is TdApi.MessageDocument -> content.document?.fileName?.takeIf { it.isNotBlank() }?.let { "📎 $it" } ?: "📎 Arquivo"
         is TdApi.MessageSticker -> "Sticker"
         is TdApi.MessageAudio -> "🎵 Áudio"
         is TdApi.MessageVoiceNote -> "🎤 Mensagem de voz"
@@ -279,6 +299,13 @@ internal class TelegramSession private constructor(private val context: Context)
         } catch (t: Throwable) {
             setError(t.message ?: "Falha ao enviar solicitação ao Telegram.")
         }
+    }
+
+    /** Picker sources are copied because TDLib's InputFileLocal requires a stable filesystem path. */
+    private fun cleanOldUploadCopies() {
+        val uploadDir = File(context.cacheDir, UPLOAD_CACHE_DIR)
+        val cutoff = System.currentTimeMillis() - UPLOAD_CACHE_RETENTION_MS
+        uploadDir.listFiles()?.filter { it.lastModified() < cutoff }?.forEach { it.delete() }
     }
 
     private fun savedApiId(): Int? = prefs.getInt(KEY_API_ID, 0).takeIf { it > 0 }
@@ -324,6 +351,8 @@ internal class TelegramSession private constructor(private val context: Context)
         private const val KEY_DB_KEY = "tdlib_db_key_encrypted"
         private const val KEYSTORE_ALIAS = "telegram_tdlib_database_key"
         private const val GCM_IV_BYTES = 12
+        private const val UPLOAD_CACHE_DIR = "telegram_uploads"
+        private const val UPLOAD_CACHE_RETENTION_MS = 48L * 60L * 60L * 1000L
         @Volatile private var instance: TelegramSession? = null
         fun get(context: Context): TelegramSession = instance ?: synchronized(this) {
             instance ?: TelegramSession(context.applicationContext).also { instance = it }

@@ -6,8 +6,10 @@ Cliente Android nativo em Kotlin/Jetpack Compose, usando TDLib para falar com a 
 
 - Autenticação de usuário por número de telefone, código, senha de duas etapas e etapas de e-mail/cadastro solicitadas pela conta.
 - Lista de conversas e histórico recente por chat, com atualizações em tempo real do TDLib.
-- Envio de mensagens de texto, pesquisa local de chats e carregamento de mais conversas.
+- Envio de mensagens de texto, fotos da galeria (até 10 MB) e arquivos (até 2 GB), com legenda opcional.
+- Pesquisa local de chats e carregamento de mais conversas.
 - Banco de dados TDLib mantido no armazenamento privado do app; a chave do banco é protegida pelo Android Keystore.
+- Anexos selecionados são copiados para um caminho privado que o TDLib consegue ler; cópias temporárias antigas são removidas após 48 horas.
 
 ## Configuração necessária
 
@@ -22,7 +24,7 @@ As credenciais do aplicativo ficam nas preferências privadas do app; não as ad
 
 A dependência TDLib acima é um pacote Android de terceiros que contém bibliotecas nativas para Android; não é um binário publicado diretamente pelo Telegram. Antes de usar uma conta importante ou distribuir uma versão, audite a origem/hash do AAR ou substitua-o por uma compilação reproduzível de TDLib oficial. Não use esta build para conversas sensíveis enquanto essa auditoria não for feita.
 
-Este é o primeiro marco funcional: autenticação, chats e mensagens de texto. Ainda faltam chamadas de áudio/vídeo, notificações em segundo plano, mídia completa (upload/download), contatos, grupos/canais e tópicos, stickers/emoji, chamadas, pesquisa global, múltiplas contas, testes de acessibilidade e validação em dispositivos físicos. Mensagens de chats secretos continuam sujeitas às limitações próprias de clientes TDLib.
+Este é o primeiro marco funcional: autenticação, chats e mensagens de texto. Ainda faltam baixar/exibir mídia recebida, progresso e retomada de transferências, chamadas de áudio/vídeo, notificações em segundo plano, contatos, grupos/canais e tópicos, stickers/emoji, pesquisa global, múltiplas contas, testes de acessibilidade e validação em dispositivos físicos. Mensagens de chats secretos continuam sujeitas às limitações próprias de clientes TDLib.
 
 ## Compilação
 

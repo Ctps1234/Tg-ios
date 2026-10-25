@@ -1,9 +1,13 @@
 package com.ctps1234.tgandroid
 
 import android.os.Bundle
+import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -28,10 +32,12 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
@@ -51,10 +57,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -64,6 +72,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.text.DateFormat
 import java.util.Date
+import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val TelegramBlue = Color(0xFF2481CC)
 private val AppBackground = Color(0xFFF4F6F8)
@@ -109,7 +121,9 @@ private fun TelegramApp(session: TelegramSession) {
                         isLoading = state.loadingChatId == activeId,
                         error = state.error,
                         onBack = { session.closeChat() },
-                        onSend = { session.sendText(activeId, it) }
+                        onSend = { session.sendText(activeId, it) },
+                        onSendPhoto = { file, caption -> session.sendPhoto(activeId, file, caption) },
+                        onSendDocument = { file, caption -> session.sendDocument(activeId, file, caption) }
                     )
                 }
             }
@@ -286,10 +300,48 @@ private fun ConversationScreen(
     isLoading: Boolean,
     error: String?,
     onBack: () -> Unit,
-    onSend: (String) -> Unit
+    onSend: (String) -> Unit,
+    onSendPhoto: (File, String) -> Unit,
+    onSendDocument: (File, String) -> Unit
 ) {
     var draft by remember(title) { mutableStateOf("") }
+    var attachmentDialog by remember { mutableStateOf(false) }
+    var preparingAttachment by remember { mutableStateOf(false) }
+    var attachmentError by remember(title) { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val messageListState = rememberLazyListState()
+
+    fun prepareAttachment(uri: Uri?, isPhoto: Boolean) {
+        if (uri == null) return
+        scope.launch {
+            preparingAttachment = true
+            attachmentError = null
+            val caption = draft
+            try {
+                val file = withContext(Dispatchers.IO) {
+                    copyPickedUri(
+                        context = context,
+                        uri = uri,
+                        maxBytes = if (isPhoto) MAX_PHOTO_BYTES else MAX_DOCUMENT_BYTES
+                    )
+                }
+                if (isPhoto) onSendPhoto(file, caption) else onSendDocument(file, caption)
+                draft = ""
+            } catch (failure: Exception) {
+                attachmentError = failure.message ?: "Não foi possível preparar o anexo."
+            } finally {
+                preparingAttachment = false
+            }
+        }
+    }
+
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        prepareAttachment(uri, true)
+    }
+    val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        prepareAttachment(uri, false)
+    }
     LaunchedEffect(messages.lastOrNull()?.id) {
         if (messages.isNotEmpty()) messageListState.animateScrollToItem(messages.lastIndex)
     }
@@ -302,19 +354,26 @@ private fun ConversationScreen(
             )
         },
         bottomBar = {
-            Row(Modifier.fillMaxWidth().background(Color(0xFFF8F8F8)).imePadding().padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Mensagem") },
-                    shape = RoundedCornerShape(24.dp),
-                    maxLines = 5,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { if (draft.isNotBlank()) { onSend(draft); draft = "" } })
-                )
-                IconButton(onClick = { if (draft.isNotBlank()) { onSend(draft); draft = "" } }, enabled = draft.isNotBlank()) {
-                    Icon(Icons.Default.Send, "Enviar", tint = if (draft.isNotBlank()) TelegramBlue else Muted)
+            Column(Modifier.fillMaxWidth().background(Color(0xFFF8F8F8))) {
+                if (preparingAttachment) Text("Preparando anexo…", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(start = 18.dp, top = 6.dp))
+                attachmentError?.let { Text(it, color = Color(0xFFB3261E), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 5.dp)) }
+                Row(Modifier.fillMaxWidth().imePadding().padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { attachmentDialog = true }, enabled = !preparingAttachment) {
+                        Icon(Icons.Default.AttachFile, "Anexar foto ou arquivo", tint = TelegramBlue)
+                    }
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Mensagem") },
+                        shape = RoundedCornerShape(24.dp),
+                        maxLines = 5,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(onSend = { if (draft.isNotBlank() && !preparingAttachment) { onSend(draft); draft = "" } })
+                    )
+                    IconButton(onClick = { if (draft.isNotBlank() && !preparingAttachment) { onSend(draft); draft = "" } }, enabled = draft.isNotBlank() && !preparingAttachment) {
+                        Icon(Icons.Default.Send, "Enviar", tint = if (draft.isNotBlank()) TelegramBlue else Muted)
+                    }
                 }
             }
         }
@@ -347,6 +406,32 @@ private fun ConversationScreen(
                 }
             }
         }
+    }
+    if (attachmentDialog) {
+        AlertDialog(
+            onDismissRequest = { attachmentDialog = false },
+            title = { Text("Anexar") },
+            text = {
+                Column {
+                    TextButton(
+                        onClick = {
+                            attachmentDialog = false
+                            photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Escolher foto") }
+                    TextButton(
+                        onClick = {
+                            attachmentDialog = false
+                            documentPicker.launch(arrayOf("*/*"))
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Escolher arquivo") }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { attachmentDialog = false }) { Text("Cancelar") } }
+        )
     }
 }
 
