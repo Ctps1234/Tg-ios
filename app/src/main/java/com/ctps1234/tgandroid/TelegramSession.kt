@@ -200,14 +200,14 @@ internal class TelegramSession private constructor(private val context: Context)
                 val list = messages[obj.chatId]
                 val index = list?.indexOfFirst { it.id == obj.messageId } ?: -1
                 if (index >= 0 && list != null) {
-                    val values = obj.reactions.reactions.mapNotNull { reaction ->
+                    val values = obj.reactions.mapNotNull { reaction ->
                         val emoji = (reaction.type as? TdApi.ReactionTypeEmoji)?.emoji ?: return@mapNotNull null
                         emoji to reaction.totalCount
                     }
                     list[index] = list[index].copy(
                         reactions = values.map { "${it.first} ${it.second}" },
                         chosenReactions = values.filter { (emoji, _) ->
-                            obj.reactions.reactions.any { it.type is TdApi.ReactionTypeEmoji && it.isChosen && (it.type as TdApi.ReactionTypeEmoji).emoji == emoji }
+                            obj.reactions.any { it.type is TdApi.ReactionTypeEmoji && it.isChosen && (it.type as TdApi.ReactionTypeEmoji).emoji == emoji }
                         }.map { it.first }.toSet()
                     )
                     publishMessages(obj.chatId)
