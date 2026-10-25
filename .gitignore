@@ -2,5 +2,7 @@
 **/build/
 local.properties
 *.iml
+*.jks
+*.keystore
 .idea/
 .DS_Store
