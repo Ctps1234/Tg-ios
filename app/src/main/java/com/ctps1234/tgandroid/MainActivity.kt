@@ -181,6 +181,7 @@ private fun TelegramApp(session: TelegramSession) {
                         onBack = { session.closeChat() },
                         onSend = { text, replyTo -> session.sendText(activeId, text, replyTo) },
                         onSendPhoto = { file, caption, replyTo -> session.sendPhoto(activeId, file, caption, replyTo) },
+                        onSendVideo = { file, caption, replyTo -> session.sendVideo(activeId, file, caption, replyTo) },
                         onSendDocument = { file, caption, replyTo -> session.sendDocument(activeId, file, caption, replyTo) },
                         onDownloadAttachment = { session.downloadAttachment(it) },
                         onLoadOlder = { session.loadOlderMessages(activeId) },
@@ -491,6 +492,7 @@ private fun ConversationScreen(
     onBack: () -> Unit,
     onSend: (String, Long?) -> Unit,
     onSendPhoto: (File, String, Long?) -> Unit,
+    onSendVideo: (File, String, Long?) -> Unit,
     onSendDocument: (File, String, Long?) -> Unit,
     onDownloadAttachment: (Int) -> Unit,
     onLoadOlder: () -> Unit,
@@ -517,7 +519,7 @@ private fun ConversationScreen(
     val scope = rememberCoroutineScope()
     val messageListState = rememberLazyListState()
 
-    fun prepareAttachment(uri: Uri?, isPhoto: Boolean, cleanupFile: File? = null) {
+    fun prepareAttachment(uri: Uri?, isPhoto: Boolean, cleanupFile: File? = null, asVideo: Boolean = false) {
         if (uri == null) { cleanupFile?.delete(); return }
         scope.launch {
             preparingAttachment = true
@@ -532,7 +534,11 @@ private fun ConversationScreen(
                         maxBytes = if (isPhoto) MAX_PHOTO_BYTES else MAX_DOCUMENT_BYTES
                     )
                 }
-                if (isPhoto) onSendPhoto(file, caption, replyId) else onSendDocument(file, caption, replyId)
+                when {
+                    isPhoto -> onSendPhoto(file, caption, replyId)
+                    asVideo -> onSendVideo(file, caption, replyId)
+                    else -> onSendDocument(file, caption, replyId)
+                }
                 draft = ""
                 replyToMessage = null
             } catch (failure: Exception) {
@@ -564,6 +570,9 @@ private fun ConversationScreen(
     }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         prepareAttachment(uri, true)
+    }
+    val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        prepareAttachment(uri, false, asVideo = true)
     }
     val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         prepareAttachment(uri, false)
@@ -721,6 +730,13 @@ private fun ConversationScreen(
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("Escolher foto") }
+                    TextButton(
+                        onClick = {
+                            attachmentDialog = false
+                            videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Escolher vídeo") }
                     TextButton(
                         onClick = {
                             attachmentDialog = false

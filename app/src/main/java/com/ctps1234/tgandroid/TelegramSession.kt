@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -489,6 +490,43 @@ internal class TelegramSession private constructor(private val context: Context)
             hasSpoiler = false
         }
         send(TdApi.SendMessage(chatId, null, createReplyTo(replyToMessageId), null, null, photo))
+    }
+
+    fun sendVideo(chatId: Long, file: File, caption: String, replyToMessageId: Long? = null) {
+        if (!file.isFile) { setError("O vídeo selecionado não está disponível."); return }
+        val retriever = MediaMetadataRetriever()
+        val metadata = try {
+            retriever.setDataSource(file.absolutePath)
+            val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()?.div(1000)?.toInt() ?: 0
+            var width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+            var height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            if (rotation == 90 || rotation == 270) { val oldWidth = width; width = height; height = oldWidth }
+            Triple(duration, width, height)
+        } catch (_: Exception) {
+            Triple(0, 0, 0)
+        } finally {
+            try { retriever.release() } catch (_: Exception) { }
+        }
+        val inputVideo = TdApi.InputVideo().apply {
+            video = TdApi.InputFileLocal(file.absolutePath)
+            thumbnail = null
+            cover = null
+            startTimestamp = 0
+            addedStickerFileIds = IntArray(0)
+            duration = metadata.first
+            width = metadata.second
+            height = metadata.third
+            supportsStreaming = true
+        }
+        val content = TdApi.InputMessageVideo().apply {
+            video = inputVideo
+            caption = caption.trim().takeIf { it.isNotEmpty() }?.let { TdApi.FormattedText(it, emptyArray()) }
+            showCaptionAboveMedia = false
+            selfDestructType = null
+            hasSpoiler = false
+        }
+        send(TdApi.SendMessage(chatId, null, createReplyTo(replyToMessageId), null, null, content))
     }
 
     fun sendDocument(chatId: Long, file: File, caption: String, replyToMessageId: Long? = null) {
