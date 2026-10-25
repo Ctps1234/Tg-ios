@@ -132,7 +132,7 @@ internal class TelegramSession private constructor(private val context: Context)
             is TdApi.UpdateNewMessage -> {
                 addMessage(obj.message)
                 if (_state.value.activeChatId == obj.message.chatId && !obj.message.isOutgoing) {
-                    send(TdApi.ViewMessages(obj.message.chatId, 0, longArrayOf(obj.message.id), true))
+                    send(TdApi.ViewMessages(obj.message.chatId, longArrayOf(obj.message.id), null, true))
                 }
             }
             is TdApi.UpdateMessageSendSucceeded -> addMessage(obj.message)
@@ -225,7 +225,7 @@ internal class TelegramSession private constructor(private val context: Context)
                     publishMessages(chatId)
                 }
                 if (result.messages.isNotEmpty()) {
-                    send(TdApi.ViewMessages(chatId, 0, result.messages.map { it.id }.toLongArray(), true))
+                    send(TdApi.ViewMessages(chatId, result.messages.map { it.id }.toLongArray(), null, true))
                 }
                 _state.update { it.copy(canLoadOlderByChat = it.canLoadOlderByChat + (chatId to (result.messages.size >= 50))) }
             }
@@ -327,7 +327,7 @@ internal class TelegramSession private constructor(private val context: Context)
             return
         }
         _state.update { it.copy(messageSearchResults = emptyList(), searchingMessages = true, messageSearchCompleted = false, error = null) }
-        send(TdApi.SearchMessages(TdApi.ChatListMain(), term, 0, 0, 0, 50, null, 0, 0)) { result ->
+        send(TdApi.SearchMessages(TdApi.ChatListMain(), term, "", 50, null, null, 0, 0)) { result ->
             val results = if (result is TdApi.Messages) result.messages.map { message ->
                 TelegramSearchResult(
                     chatId = message.chatId,
