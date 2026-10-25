@@ -131,6 +131,8 @@ private fun TelegramApp(session: TelegramSession) {
                         onLoadMore = { session.loadMoreChats() },
                         onTogglePin = { session.togglePinned(it) },
                         onMarkUnread = { session.markChatUnread(it) },
+                        onArchiveChat = { chatId, archive -> session.archiveChat(chatId, archive) },
+                        onToggleArchived = { session.setArchivedFolder(!state.showArchivedChats) },
                         onLogout = { session.logOut() }
                     )
                 } else {
@@ -255,6 +257,8 @@ private fun ChatListScreen(
     onLoadMore: () -> Unit,
     onTogglePin: (Long) -> Unit,
     onMarkUnread: (Long) -> Unit,
+    onArchiveChat: (Long, Boolean) -> Unit,
+    onToggleArchived: () -> Unit,
     onLogout: () -> Unit
 ) {
     var searchVisible by remember { mutableStateOf(false) }
@@ -262,9 +266,10 @@ private fun ChatListScreen(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             TopAppBar(
-                title = { Text("Chats", fontWeight = FontWeight.Bold) },
+                title = { Text(if (state.showArchivedChats) "Arquivadas" else "Chats", fontWeight = FontWeight.Bold) },
                 actions = {
                     IconButton(onClick = { searchVisible = !searchVisible; if (!searchVisible) onSearch("") }) { Icon(Icons.Default.Search, "Pesquisar") }
+                    TextButton(onClick = onToggleArchived) { Text(if (state.showArchivedChats) "Chats" else "Arquivo") }
                     TextButton(onClick = onLogout) { Text("Sair") }
                 }
             )
@@ -314,7 +319,8 @@ private fun ChatListScreen(
                             chat = chat,
                             onClick = { onOpen(chat.id) },
                             onTogglePin = { onTogglePin(chat.id) },
-                            onMarkUnread = { onMarkUnread(chat.id) }
+                            onMarkUnread = { onMarkUnread(chat.id) },
+                            onArchive = { onArchiveChat(chat.id, !chat.isArchived) }
                         )
                     }
                     item {
@@ -347,7 +353,8 @@ private fun ChatRow(
     chat: TelegramChat,
     onClick: () -> Unit,
     onTogglePin: () -> Unit,
-    onMarkUnread: () -> Unit
+    onMarkUnread: () -> Unit,
+    onArchive: () -> Unit
 ) {
     var menuExpanded by remember(chat.id) { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -372,13 +379,19 @@ private fun ChatRow(
         Box {
             IconButton(onClick = { menuExpanded = true }) { Icon(Icons.Default.MoreVert, "Ações da conversa", tint = Muted) }
             DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-                DropdownMenuItem(
-                    text = { Text(if (chat.isPinned) "Desafixar conversa" else "Fixar conversa") },
-                    onClick = { menuExpanded = false; onTogglePin() }
-                )
+                if (!chat.isArchived) {
+                    DropdownMenuItem(
+                        text = { Text(if (chat.isPinned) "Desafixar conversa" else "Fixar conversa") },
+                        onClick = { menuExpanded = false; onTogglePin() }
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text("Marcar como não lida") },
                     onClick = { menuExpanded = false; onMarkUnread() }
+                )
+                DropdownMenuItem(
+                    text = { Text(if (chat.isArchived) "Desarquivar conversa" else "Arquivar conversa") },
+                    onClick = { menuExpanded = false; onArchive() }
                 )
             }
         }
