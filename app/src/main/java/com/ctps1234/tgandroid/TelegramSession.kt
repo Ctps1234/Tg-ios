@@ -74,6 +74,7 @@ internal class TelegramSession private constructor(private val context: Context)
     @Volatile private var client: Client? = null
     @Volatile private var apiId: Int = savedApiId() ?: 0
     @Volatile private var apiHash: String = savedApiHash()
+    @Volatile private var searchGeneration: Int = 0
     private val chats = linkedMapOf<Long, TdApi.Chat>()
     private val messages = linkedMapOf<Long, MutableList<TelegramMessage>>()
     private val lock = Any()
@@ -322,12 +323,14 @@ internal class TelegramSession private constructor(private val context: Context)
 
     fun searchMessages(query: String) {
         val term = query.trim()
+        val requestId = ++searchGeneration
         if (term.isBlank()) {
             _state.update { it.copy(messageSearchResults = emptyList(), searchingMessages = false, messageSearchCompleted = false) }
             return
         }
         _state.update { it.copy(messageSearchResults = emptyList(), searchingMessages = true, messageSearchCompleted = false, error = null) }
         send(TdApi.SearchMessages(TdApi.ChatListMain(), term, "", 50, null, null, 0, 0)) { result ->
+            if (requestId != searchGeneration) return@send
             val results = if (result is TdApi.Messages) result.messages.map { message ->
                 TelegramSearchResult(
                     chatId = message.chatId,
