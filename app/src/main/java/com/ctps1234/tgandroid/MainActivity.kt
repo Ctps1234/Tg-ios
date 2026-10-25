@@ -1,0 +1,356 @@
+package com.ctps1234.tgandroid
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Divider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import java.text.DateFormat
+import java.util.Date
+
+private val TelegramBlue = Color(0xFF2481CC)
+private val AppBackground = Color(0xFFF4F6F8)
+private val Muted = Color(0xFF858B93)
+
+class MainActivity : ComponentActivity() {
+    private lateinit var session: TelegramSession
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        session = TelegramSession.get(applicationContext)
+        session.startIfConfigured()
+        setContent { TelegramApp(session) }
+    }
+}
+
+@Composable
+private fun TelegramApp(session: TelegramSession) {
+    val state by session.state.collectAsState()
+    var search by remember { mutableStateOf("") }
+    MaterialTheme(colorScheme = lightColorScheme(primary = TelegramBlue)) {
+        Surface(Modifier.fillMaxSize(), color = AppBackground) {
+            if (state.authStep != AuthStep.READY) {
+                AuthenticationScreen(state, session)
+            } else {
+                val activeId = state.activeChatId
+                if (activeId == null) {
+                    ChatListScreen(
+                        state = state,
+                        search = search,
+                        onSearch = { search = it },
+                        onOpen = { session.openChat(it) },
+                        onLoadMore = { session.loadMoreChats() },
+                        onLogout = { session.logOut() }
+                    )
+                } else {
+                    BackHandler { session.closeChat() }
+                    val chat = state.chats.firstOrNull { it.id == activeId }
+                    val messages = state.messagesByChat[activeId].orEmpty()
+                    ConversationScreen(
+                        title = chat?.title ?: "Telegram",
+                        messages = messages,
+                        isLoading = state.loadingChatId == activeId,
+                        error = state.error,
+                        onBack = { session.closeChat() },
+                        onSend = { session.sendText(activeId, it) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AuthenticationScreen(state: TelegramUiState, session: TelegramSession) {
+    var apiId by remember { mutableStateOf("") }
+    var apiHash by remember { mutableStateOf("") }
+    var input by remember { mutableStateOf("") }
+    var firstName by remember { mutableStateOf("") }
+    var lastName by remember { mutableStateOf("") }
+    LaunchedEffect(state.authStep) { input = "" }
+    Column(Modifier.fillMaxSize().imePadding(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(Modifier.size(76.dp).background(TelegramBlue, CircleShape), contentAlignment = Alignment.Center) {
+                Text("✈", color = Color.White, fontSize = 36.sp)
+            }
+            Spacer(Modifier.height(18.dp))
+            Text("Telegram", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Text(state.status.ifBlank { authDescription(state.authStep) }, color = Muted, fontSize = 14.sp)
+            Spacer(Modifier.height(22.dp))
+
+            when (state.authStep) {
+                AuthStep.CONFIG -> {
+                    Text("Conecte usando suas credenciais de desenvolvedor do Telegram.", color = Muted, fontSize = 13.sp)
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(apiId, { apiId = it.filter(Char::isDigit) }, label = { Text("API ID") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(apiHash, { apiHash = it }, label = { Text("API hash") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(12.dp))
+                    Button(onClick = { session.configureAndConnect(apiId, apiHash) }, modifier = Modifier.fillMaxWidth()) { Text("Continuar") }
+                    Spacer(Modifier.height(10.dp))
+                    Text("Obtenha api_id e api_hash em my.telegram.org/apps. Eles identificam o aplicativo; não use credenciais de terceiros.", color = Muted, fontSize = 12.sp)
+                }
+                AuthStep.PHONE -> {
+                    OutlinedTextField(input, { input = it }, label = { Text("Número de telefone") }, placeholder = { Text("+55 22 99999-9999") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Done), modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(12.dp))
+                    Button(onClick = { session.submitPhone(input) }, enabled = input.trim().length >= 6, modifier = Modifier.fillMaxWidth()) { Text("Enviar código") }
+                }
+                AuthStep.CODE, AuthStep.EMAIL_CODE -> {
+                    OutlinedTextField(input, { input = it }, label = { Text(if (state.authStep == AuthStep.CODE) "Código do Telegram" else "Código do e-mail") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done), modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(12.dp))
+                    Button(onClick = { if (state.authStep == AuthStep.CODE) session.submitCode(input) else session.submitEmailCode(input) }, enabled = input.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text("Verificar") }
+                }
+                AuthStep.PASSWORD -> {
+                    OutlinedTextField(input, { input = it }, label = { Text("Senha de verificação em duas etapas") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done), modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(12.dp))
+                    Button(onClick = { session.submitPassword(input) }, enabled = input.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text("Entrar") }
+                }
+                AuthStep.EMAIL -> {
+                    OutlinedTextField(input, { input = it }, label = { Text("E-mail") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Done), modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(12.dp))
+                    Button(onClick = { session.submitEmail(input) }, enabled = input.contains('@'), modifier = Modifier.fillMaxWidth()) { Text("Enviar código") }
+                }
+                AuthStep.REGISTRATION -> {
+                    OutlinedTextField(firstName, { firstName = it }, label = { Text("Nome") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(lastName, { lastName = it }, label = { Text("Sobrenome (opcional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(12.dp))
+                    Button(onClick = { session.submitRegistration(firstName, lastName) }, enabled = firstName.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text("Criar conta") }
+                }
+                AuthStep.QR_CONFIRMATION -> Text(state.status, color = Muted)
+                AuthStep.CONNECTING -> CircularProgressIndicator(color = TelegramBlue)
+                AuthStep.READY -> Unit
+            }
+            state.error?.let {
+                Spacer(Modifier.height(14.dp))
+                Text(it, color = Color(0xFFB3261E), fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+private fun authDescription(step: AuthStep): String = when (step) {
+    AuthStep.CONFIG -> "Entre com seu número do Telegram"
+    AuthStep.CONNECTING -> "Conectando com segurança…"
+    AuthStep.PHONE -> "Digite seu número com código do país"
+    AuthStep.CODE -> "Verifique suas mensagens do Telegram"
+    AuthStep.PASSWORD -> "Autenticação em duas etapas"
+    AuthStep.EMAIL -> "Confirme seu e-mail"
+    AuthStep.EMAIL_CODE -> "Verifique o código enviado por e-mail"
+    AuthStep.REGISTRATION -> "Crie seu perfil"
+    AuthStep.QR_CONFIRMATION -> "Confirme em outro dispositivo"
+    AuthStep.READY -> ""
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun ChatListScreen(
+    state: TelegramUiState,
+    search: String,
+    onSearch: (String) -> Unit,
+    onOpen: (Long) -> Unit,
+    onLoadMore: () -> Unit,
+    onLogout: () -> Unit
+) {
+    var searchVisible by remember { mutableStateOf(false) }
+    Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        topBar = {
+            TopAppBar(
+                title = { Text("Chats", fontWeight = FontWeight.Bold) },
+                actions = {
+                    IconButton(onClick = { searchVisible = !searchVisible; if (!searchVisible) onSearch("") }) { Icon(Icons.Default.Search, "Pesquisar") }
+                    TextButton(onClick = onLogout) { Text("Sair") }
+                }
+            )
+        }
+    ) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding).background(Color.White)) {
+            if (searchVisible) {
+                OutlinedTextField(search, onSearch, modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp), label = { Text("Pesquisar conversas") }, singleLine = true)
+            }
+            state.error?.let { Text(it, color = Color(0xFFB3261E), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontSize = 13.sp) }
+            if (state.chats.isEmpty()) {
+                Column(Modifier.fillMaxSize().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                    CircularProgressIndicator(color = TelegramBlue)
+                    Spacer(Modifier.height(14.dp))
+                    Text(if (state.error == null) "Carregando suas conversas…" else "Não foi possível carregar as conversas", color = Muted)
+                    Spacer(Modifier.height(10.dp))
+                    TextButton(onClick = onLoadMore) { Text("Tentar novamente") }
+                }
+            } else {
+                val filtered = state.chats.filter { it.title.contains(search, true) || it.preview.contains(search, true) }
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(filtered, key = { it.id }) { chat ->
+                        ChatRow(chat) { onOpen(chat.id) }
+                    }
+                    item {
+                        Row(Modifier.fillMaxWidth().clickable(onClick = onLoadMore).padding(18.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.CloudDownload, null, tint = TelegramBlue, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Carregar mais conversas", color = TelegramBlue, fontSize = 14.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatRow(chat: TelegramChat, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(52.dp).background(avatarColor(chat.title), CircleShape), contentAlignment = Alignment.Center) {
+            Text(chat.title.trim().take(1).uppercase().ifBlank { "T" }, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 20.sp)
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(chat.title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(chat.preview, color = Muted, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
+        }
+        Spacer(Modifier.width(8.dp))
+        Column(horizontalAlignment = Alignment.End) {
+            Text(if (chat.date > 0) DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(chat.date * 1000L)) else "", color = Muted, fontSize = 11.sp)
+            if (chat.unreadCount > 0) {
+                Spacer(Modifier.height(5.dp))
+                Box(Modifier.background(TelegramBlue, CircleShape).padding(horizontal = 7.dp, vertical = 2.dp)) {
+                    Text(chat.unreadCount.toString(), color = Color.White, fontSize = 11.sp)
+                }
+            }
+        }
+    }
+    Divider(Modifier.padding(start = 80.dp), color = Color(0xFFF0F0F0), thickness = 0.5.dp)
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun ConversationScreen(
+    title: String,
+    messages: List<TelegramMessage>,
+    isLoading: Boolean,
+    error: String?,
+    onBack: () -> Unit,
+    onSend: (String) -> Unit
+) {
+    var draft by remember(title) { mutableStateOf("") }
+    val messageListState = rememberLazyListState()
+    LaunchedEffect(messages.lastOrNull()?.id) {
+        if (messages.isNotEmpty()) messageListState.animateScrollToItem(messages.lastIndex)
+    }
+    Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        topBar = {
+            TopAppBar(
+                title = { Column { Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Text("Telegram", color = Muted, fontSize = 11.sp) } },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Voltar", tint = TelegramBlue) } }
+            )
+        },
+        bottomBar = {
+            Row(Modifier.fillMaxWidth().background(Color(0xFFF8F8F8)).imePadding().padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Mensagem") },
+                    shape = RoundedCornerShape(24.dp),
+                    maxLines = 5,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { if (draft.isNotBlank()) { onSend(draft); draft = "" } })
+                )
+                IconButton(onClick = { if (draft.isNotBlank()) { onSend(draft); draft = "" } }, enabled = draft.isNotBlank()) {
+                    Icon(Icons.Default.Send, "Enviar", tint = if (draft.isNotBlank()) TelegramBlue else Muted)
+                }
+            }
+        }
+    ) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding).background(Color(0xFFE9EEF2))) {
+            error?.let { Text(it, color = Color(0xFFB3261E), modifier = Modifier.fillMaxWidth().background(Color.White).padding(10.dp), fontSize = 13.sp) }
+            if (messages.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        if (isLoading) CircularProgressIndicator(color = TelegramBlue, modifier = Modifier.size(30.dp))
+                        Spacer(Modifier.height(12.dp))
+                        Text(if (isLoading) "Carregando mensagens…" else "Nenhuma mensagem ainda. Envie uma para começar.", color = Muted, fontSize = 14.sp)
+                    }
+                }
+            } else {
+                LazyColumn(state = messageListState, modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp), reverseLayout = false, verticalArrangement = Arrangement.Bottom) {
+                    items(messages, key = { it.id }) { message ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.outgoing) Arrangement.End else Arrangement.Start) {
+                            Surface(color = if (message.outgoing) Color(0xFFD9FDD3) else Color.White, shape = RoundedCornerShape(16.dp), shadowElevation = 1.dp, modifier = Modifier.padding(vertical = 3.dp)) {
+                                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                    Text(message.text, color = Color(0xFF202328), fontSize = 15.sp)
+                                    Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
+                                        Text(if (message.date > 0) DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(message.date * 1000L)) else "", color = Muted, fontSize = 10.sp)
+                                        if (message.outgoing) { Spacer(Modifier.width(3.dp)); Icon(Icons.Default.Check, null, tint = TelegramBlue, modifier = Modifier.size(12.dp)) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun avatarColor(value: String): Color {
+    val palette = listOf(Color(0xFF6485E8), Color(0xFFE58C78), Color(0xFF48A68A), Color(0xFF956FC2), Color(0xFFE1A347), Color(0xFF468FAF))
+    return palette[(value.hashCode().toLong().and(0x7fffffffL) % palette.size).toInt()]
+}

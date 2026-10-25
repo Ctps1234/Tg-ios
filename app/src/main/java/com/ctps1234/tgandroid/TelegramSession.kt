@@ -1,0 +1,331 @@
+package com.ctps1234.tgandroid
+
+import android.content.Context
+import android.os.Build
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import org.drinkless.tdlib.Client
+import org.drinkless.tdlib.TdApi
+import java.io.File
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
+
+internal enum class AuthStep { CONFIG, CONNECTING, PHONE, CODE, PASSWORD, EMAIL, EMAIL_CODE, REGISTRATION, QR_CONFIRMATION, READY }
+
+internal data class TelegramChat(
+    val id: Long,
+    val title: String,
+    val preview: String,
+    val unreadCount: Int,
+    val date: Int
+)
+
+internal data class TelegramMessage(
+    val id: Long,
+    val text: String,
+    val outgoing: Boolean,
+    val date: Int
+)
+
+internal data class TelegramUiState(
+    val authStep: AuthStep = AuthStep.CONFIG,
+    val chats: List<TelegramChat> = emptyList(),
+    val messagesByChat: Map<Long, List<TelegramMessage>> = emptyMap(),
+    val activeChatId: Long? = null,
+    val loadingChatId: Long? = null,
+    val error: String? = null,
+    val status: String = ""
+)
+
+/** A small TDLib adapter: keeps the UI independent of TDLib objects and JNI. */
+internal class TelegramSession private constructor(private val context: Context) {
+    private val prefs = context.getSharedPreferences("telegram_config", Context.MODE_PRIVATE)
+    private val _state = MutableStateFlow(
+        TelegramUiState(authStep = if (savedApiId() != null && savedApiHash().isNotBlank()) AuthStep.CONNECTING else AuthStep.CONFIG)
+    )
+    val state: StateFlow<TelegramUiState> = _state.asStateFlow()
+
+    @Volatile private var client: Client? = null
+    @Volatile private var apiId: Int = savedApiId() ?: 0
+    @Volatile private var apiHash: String = savedApiHash()
+    private val chats = linkedMapOf<Long, TdApi.Chat>()
+    private val messages = linkedMapOf<Long, MutableList<TelegramMessage>>()
+    private val lock = Any()
+
+    fun startIfConfigured() {
+        if (apiId > 0 && apiHash.isNotBlank()) startClient()
+    }
+
+    fun configureAndConnect(rawApiId: String, rawApiHash: String) {
+        val parsedId = rawApiId.trim().toIntOrNull()
+        val hash = rawApiHash.trim()
+        if (parsedId == null || parsedId <= 0 || hash.isBlank()) {
+            _state.update { it.copy(error = "Informe um API ID válido e o API hash obtidos em my.telegram.org/apps.") }
+            return
+        }
+        apiId = parsedId
+        apiHash = hash
+        prefs.edit().putInt(KEY_API_ID, parsedId).putString(KEY_API_HASH, hash).apply()
+        _state.update { it.copy(authStep = AuthStep.CONNECTING, error = null, status = "Conectando ao Telegram…") }
+        startClient()
+    }
+
+    private fun startClient() {
+        if (client != null) return
+        try {
+            File(context.filesDir, "tdlib").mkdirs()
+            File(context.filesDir, "tdlib_files").mkdirs()
+            val created = Client.create(
+                { update -> onUpdate(update) },
+                { _ -> Unit },
+                { throwable -> _state.update { it.copy(error = throwable.message ?: "Erro interno do TDLib") } }
+            )
+            client = created
+            created.send(TdApi.SetLogVerbosityLevel(1), null)
+            _state.update { it.copy(authStep = AuthStep.CONNECTING, error = null, status = "Inicializando sessão segura…") }
+        } catch (t: Throwable) {
+            client = null
+            _state.update { it.copy(authStep = AuthStep.CONFIG, error = "Não foi possível iniciar o TDLib: ${t.message ?: t.javaClass.simpleName}") }
+        }
+    }
+
+    private fun onUpdate(obj: TdApi.Object) {
+        when (obj) {
+            is TdApi.UpdateAuthorizationState -> onAuthorizationState(obj.authorizationState)
+            is TdApi.UpdateNewChat -> synchronized(lock) { chats[obj.chat.id] = obj.chat; publishChats() }
+            is TdApi.UpdateChatTitle -> synchronized(lock) { chats[obj.chatId]?.title = obj.title; publishChats() }
+            is TdApi.UpdateChatLastMessage -> synchronized(lock) {
+                chats[obj.chatId]?.let { chat -> chat.lastMessage = obj.lastMessage }
+                publishChats()
+            }
+            is TdApi.UpdateChatReadInbox -> synchronized(lock) {
+                chats[obj.chatId]?.unreadCount = obj.unreadCount
+                publishChats()
+            }
+            is TdApi.UpdateNewMessage -> addMessage(obj.message)
+            is TdApi.UpdateMessageSendSucceeded -> addMessage(obj.message)
+            is TdApi.UpdateMessageContent -> synchronized(lock) {
+                val list = messages[obj.chatId]
+                val index = list?.indexOfFirst { it.id == obj.messageId } ?: -1
+                if (index >= 0 && list != null) {
+                    val old = list[index]
+                    list[index] = old.copy(text = contentText(obj.newContent))
+                    publishMessages(obj.chatId)
+                }
+            }
+            is TdApi.UpdateDeleteMessages -> synchronized(lock) {
+                messages[obj.chatId]?.removeAll { it.id in obj.messageIds.toSet() }
+                publishMessages(obj.chatId)
+            }
+            else -> Unit
+        }
+    }
+
+    private fun onAuthorizationState(auth: TdApi.AuthorizationState) {
+        when (auth) {
+            is TdApi.AuthorizationStateWaitTdlibParameters -> {
+                _state.update { it.copy(authStep = AuthStep.CONNECTING, error = null, status = "Configurando o banco local criptografado…") }
+                val dbKey = try { encryptedDatabaseKey() } catch (t: Throwable) {
+                    _state.update { it.copy(error = "Não foi possível proteger o banco local: ${t.message}") }
+                    return
+                }
+                val db = File(context.filesDir, "tdlib").absolutePath
+                val files = File(context.filesDir, "tdlib_files").absolutePath
+                val parameters = TdApi.SetTdlibParameters(
+                    false, db, files, dbKey,
+                    true, true, true, true,
+                    apiId, apiHash, "pt-BR", Build.MODEL ?: "Android",
+                    "Android ${Build.VERSION.RELEASE ?: ""}", "0.2.0"
+                )
+                send(parameters)
+            }
+            is TdApi.AuthorizationStateWaitPhoneNumber -> setStep(AuthStep.PHONE, "Digite seu número com código do país (ex.: +55…).")
+            is TdApi.AuthorizationStateWaitCode -> setStep(AuthStep.CODE, "Digite o código enviado pelo Telegram.")
+            is TdApi.AuthorizationStateWaitPassword -> setStep(AuthStep.PASSWORD, "Sua conta usa a verificação em duas etapas.")
+            is TdApi.AuthorizationStateWaitEmailAddress -> setStep(AuthStep.EMAIL, "Digite o e-mail solicitado pelo Telegram.")
+            is TdApi.AuthorizationStateWaitEmailCode -> setStep(AuthStep.EMAIL_CODE, "Digite o código enviado por e-mail.")
+            is TdApi.AuthorizationStateWaitRegistration -> setStep(AuthStep.REGISTRATION, "Informe seu nome para concluir o cadastro.")
+            is TdApi.AuthorizationStateWaitOtherDeviceConfirmation -> setStep(AuthStep.QR_CONFIRMATION, "Confirme a entrada em outro dispositivo: ${auth.link}")
+            is TdApi.AuthorizationStateReady -> {
+                _state.update { it.copy(authStep = AuthStep.READY, error = null, status = "Conectado") }
+                loadChats()
+            }
+            is TdApi.AuthorizationStateLoggingOut -> setStep(AuthStep.CONNECTING, "Encerrando sessão…")
+            is TdApi.AuthorizationStateClosing -> setStep(AuthStep.CONNECTING, "Fechando sessão…")
+            is TdApi.AuthorizationStateClosed -> {
+                client = null
+                if (apiId > 0 && apiHash.isNotBlank()) {
+                    _state.update { it.copy(authStep = AuthStep.CONNECTING, error = null, status = "Preparando uma nova sessão…") }
+                    startClient()
+                } else {
+                    setStep(AuthStep.CONFIG, "Sessão encerrada.")
+                }
+            }
+            else -> setStep(AuthStep.CONNECTING, "Aguardando resposta do Telegram…")
+        }
+    }
+
+    fun submitPhone(phone: String) = send(TdApi.SetAuthenticationPhoneNumber(phone.trim(), null))
+    fun submitCode(code: String) = send(TdApi.CheckAuthenticationCode(code.trim()))
+    fun submitPassword(password: String) = send(TdApi.CheckAuthenticationPassword(password))
+    fun submitEmail(email: String) = send(TdApi.SetAuthenticationEmailAddress(email.trim()))
+    fun submitEmailCode(code: String) = send(TdApi.CheckAuthenticationEmailCode(TdApi.EmailAddressAuthenticationCode(code.trim())))
+    fun submitRegistration(firstName: String, lastName: String) = send(TdApi.RegisterUser(firstName.trim(), lastName.trim(), false))
+
+    fun openChat(chatId: Long) {
+        send(TdApi.OpenChat(chatId))
+        synchronized(lock) { messages[chatId] = mutableListOf() }
+        _state.update { it.copy(activeChatId = chatId, loadingChatId = chatId, messagesByChat = it.messagesByChat + (chatId to emptyList()), error = null) }
+        send(TdApi.GetChatHistory(chatId, 0, 0, 50, false)) { result ->
+            if (result is TdApi.Messages) {
+                synchronized(lock) {
+                    messages[chatId] = result.messages.map(::toMessage).sortedBy { it.date }.toMutableList()
+                    publishMessages(chatId)
+                }
+            }
+            _state.update { it.copy(loadingChatId = null) }
+        }
+    }
+
+    fun closeChat() {
+        _state.value.activeChatId?.let { send(TdApi.CloseChat(it)) }
+        _state.update { it.copy(activeChatId = null, loadingChatId = null, error = null) }
+    }
+
+    fun sendText(chatId: Long, text: String) {
+        if (text.isBlank()) return
+        val content = TdApi.InputMessageText(TdApi.FormattedText(text.trim(), emptyArray()), false, true)
+        send(TdApi.SendMessage(chatId, 0, 0, null, null, content)) { result ->
+            if (result is TdApi.Error) setError(result.message)
+        }
+    }
+
+    fun loadMoreChats() {
+        send(TdApi.LoadChats(TdApi.ChatListMain(), 100))
+    }
+
+    fun logOut() { send(TdApi.LogOut()) }
+
+    private fun loadChats() {
+        synchronized(lock) { chats.clear(); messages.clear(); publishChats() }
+        send(TdApi.LoadChats(TdApi.ChatListMain(), 100))
+        send(TdApi.GetMe()) { result ->
+            if (result is TdApi.Error) setError(result.message)
+        }
+    }
+
+    private fun addMessage(message: TdApi.Message) = synchronized(lock) {
+        val list = messages.getOrPut(message.chatId) { mutableListOf() }
+        val converted = toMessage(message)
+        val existing = list.indexOfFirst { it.id == converted.id }
+        if (existing >= 0) list[existing] = converted else list.add(converted)
+        list.sortBy { it.date }
+        publishMessages(message.chatId)
+        chats[message.chatId]?.let { chat -> if (chat.lastMessage == null || chat.lastMessage.id <= message.id) chat.lastMessage = message }
+        publishChats()
+    }
+
+    private fun toMessage(message: TdApi.Message) = TelegramMessage(
+        message.id, contentText(message.content), message.isOutgoing, message.date
+    )
+
+    private fun contentText(content: TdApi.MessageContent): String = when (content) {
+        is TdApi.MessageText -> content.text.text
+        is TdApi.MessagePhoto -> "📷 Foto"
+        is TdApi.MessageVideo -> "▶ Vídeo"
+        is TdApi.MessageDocument -> "📎 Arquivo"
+        is TdApi.MessageSticker -> "Sticker"
+        is TdApi.MessageAudio -> "🎵 Áudio"
+        is TdApi.MessageVoiceNote -> "🎤 Mensagem de voz"
+        else -> "Mensagem"
+    }
+
+    private fun publishChats() {
+        val snapshot = chats.values.map { chat ->
+            val last = chat.lastMessage
+            TelegramChat(chat.id, chat.title ?: "", last?.let { contentText(it.content) } ?: "Sem mensagens", chat.unreadCount, last?.date ?: 0)
+        }.sortedWith(compareByDescending<TelegramChat> { it.date }.thenBy { it.title.lowercase() })
+        _state.update { it.copy(chats = snapshot) }
+    }
+
+    private fun publishMessages(chatId: Long) {
+        val snapshot = messages[chatId]?.toList().orEmpty()
+        _state.update { it.copy(messagesByChat = it.messagesByChat + (chatId to snapshot)) }
+    }
+
+    private fun setStep(step: AuthStep, status: String) = _state.update { it.copy(authStep = step, status = status, error = null) }
+    private fun setError(error: String) = _state.update { it.copy(error = error, status = "") }
+
+    private fun send(function: TdApi.Function, onResult: ((TdApi.Object) -> Unit)? = null) {
+        val activeClient = client
+        if (activeClient == null) {
+            setError("Cliente ainda não está conectado.")
+            return
+        }
+        try {
+            activeClient.send(function, Client.ResultHandler { result ->
+                if (result is TdApi.Error) setError("${result.code}: ${result.message}")
+                onResult?.invoke(result)
+            })
+        } catch (t: Throwable) {
+            setError(t.message ?: "Falha ao enviar solicitação ao Telegram.")
+        }
+    }
+
+    private fun savedApiId(): Int? = prefs.getInt(KEY_API_ID, 0).takeIf { it > 0 }
+    private fun savedApiHash(): String = prefs.getString(KEY_API_HASH, "").orEmpty()
+
+    /** Keep the local TDLib database key encrypted by an AES key held in Android Keystore. */
+    private fun encryptedDatabaseKey(): ByteArray {
+        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val secretKey = if (keyStore.containsAlias(KEYSTORE_ALIAS)) {
+            keyStore.getKey(KEYSTORE_ALIAS, null) as SecretKey
+        } else {
+            val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+            generator.init(
+                KeyGenParameterSpec.Builder(KEYSTORE_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setRandomizedEncryptionRequired(true)
+                    .build()
+            )
+            generator.generateKey()
+        }
+        val saved = prefs.getString(KEY_DB_KEY, null)
+        if (saved != null) {
+            val all = Base64.decode(saved, Base64.NO_WRAP)
+            val iv = all.copyOfRange(0, GCM_IV_BYTES)
+            val encrypted = all.copyOfRange(GCM_IV_BYTES, all.size)
+            return Cipher.getInstance("AES/GCM/NoPadding").run {
+                init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(128, iv))
+                doFinal(encrypted)
+            }
+        }
+        val raw = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey)
+        val stored = cipher.iv + cipher.doFinal(raw)
+        prefs.edit().putString(KEY_DB_KEY, Base64.encodeToString(stored, Base64.NO_WRAP)).apply()
+        return raw
+    }
+
+    companion object {
+        private const val KEY_API_ID = "api_id"
+        private const val KEY_API_HASH = "api_hash"
+        private const val KEY_DB_KEY = "tdlib_db_key_encrypted"
+        private const val KEYSTORE_ALIAS = "telegram_tdlib_database_key"
+        private const val GCM_IV_BYTES = 12
+        @Volatile private var instance: TelegramSession? = null
+        fun get(context: Context): TelegramSession = instance ?: synchronized(this) {
+            instance ?: TelegramSession(context.applicationContext).also { instance = it }
+        }
+    }
+}
