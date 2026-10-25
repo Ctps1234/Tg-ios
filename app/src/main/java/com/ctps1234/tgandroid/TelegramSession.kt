@@ -521,7 +521,7 @@ internal class TelegramSession private constructor(private val context: Context)
         }
         val content = TdApi.InputMessageVideo().apply {
             video = inputVideo
-            caption = caption.trim().takeIf { it.isNotEmpty() }?.let { TdApi.FormattedText(it, emptyArray()) }
+            caption = caption.trim()
             showCaptionAboveMedia = false
             selfDestructType = null
             hasSpoiler = false
