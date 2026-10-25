@@ -38,6 +38,13 @@ internal data class TelegramChat(
     val isArchived: Boolean = false
 )
 
+internal data class TelegramSticker(
+    val fileId: Int,
+    val emoji: String,
+    val width: Int,
+    val height: Int
+)
+
 internal data class TelegramSearchResult(
     val chatId: Long,
     val chatTitle: String,
@@ -64,6 +71,7 @@ internal data class TelegramMessage(
 internal data class TelegramUiState(
     val authStep: AuthStep = AuthStep.CONFIG,
     val chats: List<TelegramChat> = emptyList(),
+    val stickers: List<TelegramSticker> = emptyList(),
     val showArchivedChats: Boolean = false,
     val messagesByChat: Map<Long, List<TelegramMessage>> = emptyMap(),
     val messageSearchResults: List<TelegramSearchResult> = emptyList(),
@@ -90,6 +98,7 @@ internal class TelegramSession private constructor(private val context: Context)
     @Volatile private var apiId: Int = savedApiId() ?: 0
     @Volatile private var apiHash: String = savedApiHash()
     @Volatile private var searchGeneration: Int = 0
+    @Volatile private var stickersRequested: Boolean = false
     private val chats = linkedMapOf<Long, TdApi.Chat>()
     private val pinnedChatIds = mutableSetOf<Long>()
     private val archivedChatIds = mutableSetOf<Long>()
@@ -249,6 +258,7 @@ internal class TelegramSession private constructor(private val context: Context)
             is TdApi.AuthorizationStateReady -> {
                 _state.update { it.copy(authStep = AuthStep.READY, error = null, status = "Conectado") }
                 loadChats()
+                loadInstalledStickers()
             }
             is TdApi.AuthorizationStateLoggingOut -> setStep(AuthStep.CONNECTING, "Encerrando sessão…")
             is TdApi.AuthorizationStateClosing -> setStep(AuthStep.CONNECTING, "Fechando sessão…")
@@ -368,6 +378,35 @@ internal class TelegramSession private constructor(private val context: Context)
         } else {
             send(TdApi.AddMessageReaction(chatId, messageId, TdApi.ReactionTypeEmoji(emoji), false, true))
         }
+    }
+
+    private fun loadInstalledStickers() {
+        if (stickersRequested) return
+        stickersRequested = true
+        send(TdApi.GetInstalledStickerSets(TdApi.StickerTypeRegular())) { result ->
+            if (result is TdApi.StickerSets) {
+                result.sets.take(8).forEach { setInfo ->
+                    send(TdApi.GetStickerSet(setInfo.id)) { setResult ->
+                        if (setResult is TdApi.StickerSet) {
+                            val options = setResult.stickers.map { sticker ->
+                                TelegramSticker(sticker.sticker.id, sticker.emoji, sticker.width, sticker.height)
+                            }
+                            _state.update { current ->
+                                current.copy(stickers = (current.stickers + options).distinctBy { it.fileId }.take(160))
+                            }
+                        }
+                    }
+                }
+            } else {
+                stickersRequested = false
+            }
+        }
+    }
+
+    fun sendSticker(chatId: Long, sticker: TelegramSticker, replyToMessageId: Long? = null) {
+        val inputSticker = TdApi.InputSticker(TdApi.InputFileId(sticker.fileId), null, sticker.width, sticker.height)
+        val content = TdApi.InputMessageSticker(inputSticker, sticker.emoji)
+        send(TdApi.SendMessage(chatId, null, createReplyTo(replyToMessageId), null, null, content))
     }
 
     fun sendPhoto(chatId: Long, file: File, caption: String, replyToMessageId: Long? = null) {
@@ -557,6 +596,7 @@ internal class TelegramSession private constructor(private val context: Context)
         is TdApi.MessageDocument -> content.document?.document?.let { Triple(it, content.document.fileName, "document") }
         is TdApi.MessageAudio -> content.audio?.audio?.let { Triple(it, content.audio.fileName, "audio") }
         is TdApi.MessageVoiceNote -> content.voiceNote?.voice?.let { Triple(it, "Mensagem de voz", "audio") }
+        is TdApi.MessageSticker -> content.sticker?.sticker?.let { Triple(it, "sticker.webp", "image") }
         is TdApi.MessageAnimation -> content.animation?.animation?.let { Triple(it, content.animation.fileName, "animation") }
         else -> null
     }
@@ -591,7 +631,7 @@ internal class TelegramSession private constructor(private val context: Context)
         is TdApi.MessageDocument -> content.caption?.text?.takeIf { it.isNotBlank() }
             ?: content.document?.fileName?.takeIf { it.isNotBlank() }?.let { "📎 $it" } ?: "📎 Arquivo"
         is TdApi.MessageAnimation -> content.caption?.text?.takeIf { it.isNotBlank() } ?: "GIF"
-        is TdApi.MessageSticker -> "Sticker"
+        is TdApi.MessageSticker -> content.sticker?.sticker?.emoji?.takeIf { it.isNotBlank() } ?: "Sticker"
         is TdApi.MessageAudio -> content.caption?.text?.takeIf { it.isNotBlank() } ?: "🎵 Áudio"
         is TdApi.MessageVoiceNote -> content.caption?.text?.takeIf { it.isNotBlank() } ?: "🎤 Mensagem de voz"
         else -> "Mensagem"

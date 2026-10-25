@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -49,6 +50,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.MoreVert
@@ -166,6 +168,7 @@ private fun TelegramApp(session: TelegramSession) {
                     ConversationScreen(
                         title = chat?.title ?: "Telegram",
                         chats = state.chats,
+                        stickers = state.stickers,
                         messages = messages,
                         isLoading = state.loadingChatId == activeId,
                         isLoadingOlder = state.loadingOlderChatId == activeId,
@@ -180,7 +183,8 @@ private fun TelegramApp(session: TelegramSession) {
                         onDeleteMessage = { session.deleteMessage(activeId, it) },
                         onEditMessage = { messageId, text -> session.editMessageText(activeId, messageId, text) },
                         onForwardMessage = { messageId, targetChatId -> session.forwardMessage(activeId, messageId, targetChatId) },
-                        onToggleReaction = { messageId, emoji -> session.toggleReaction(activeId, messageId, emoji) }
+                        onToggleReaction = { messageId, emoji -> session.toggleReaction(activeId, messageId, emoji) },
+                        onSendSticker = { sticker, replyTo -> session.sendSticker(activeId, sticker, replyTo) }
                     )
                 }
             }
@@ -440,6 +444,7 @@ private fun ChatRow(
 private fun ConversationScreen(
     title: String,
     chats: List<TelegramChat>,
+    stickers: List<TelegramSticker>,
     messages: List<TelegramMessage>,
     isLoading: Boolean,
     isLoadingOlder: Boolean,
@@ -454,10 +459,12 @@ private fun ConversationScreen(
     onDeleteMessage: (Long) -> Unit,
     onEditMessage: (Long, String) -> Unit,
     onForwardMessage: (Long, Long) -> Unit,
-    onToggleReaction: (Long, String) -> Unit
+    onToggleReaction: (Long, String) -> Unit,
+    onSendSticker: (TelegramSticker, Long?) -> Unit
 ) {
     var draft by remember(title) { mutableStateOf("") }
     var attachmentDialog by remember { mutableStateOf(false) }
+    var stickerDialog by remember { mutableStateOf(false) }
     var preparingAttachment by remember { mutableStateOf(false) }
     var attachmentError by remember(title) { mutableStateOf<String?>(null) }
     var messageActions by remember { mutableStateOf<TelegramMessage?>(null) }
@@ -548,6 +555,9 @@ private fun ConversationScreen(
                 if (preparingAttachment) Text("Preparando anexo…", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(start = 18.dp, top = 6.dp))
                 attachmentError?.let { Text(it, color = Color(0xFFB3261E), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 5.dp)) }
                 Row(Modifier.fillMaxWidth().imePadding().padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { stickerDialog = true }, enabled = !preparingAttachment) {
+                        Icon(Icons.Default.EmojiEmotions, "Stickers", tint = TelegramBlue)
+                    }
                     IconButton(onClick = { attachmentDialog = true }, enabled = !preparingAttachment) {
                         Icon(Icons.Default.AttachFile, "Anexar foto ou arquivo", tint = TelegramBlue)
                     }
@@ -629,6 +639,36 @@ private fun ConversationScreen(
                 }
             }
         }
+    }
+    if (stickerDialog) {
+        val stickerRows = stickers.chunked(4)
+        AlertDialog(
+            onDismissRequest = { stickerDialog = false },
+            title = { Text("Stickers") },
+            text = {
+                if (stickerRows.isEmpty()) {
+                    Text("Carregando stickers ou nenhum conjunto instalado.", color = Muted)
+                } else {
+                    LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                        itemsIndexed(stickerRows) { _, row ->
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                                row.forEach { sticker ->
+                                    TextButton(onClick = {
+                                        onSendSticker(sticker, replyToMessage?.id)
+                                        replyToMessage = null
+                                        stickerDialog = false
+                                    }) {
+                                        Text(sticker.emoji.ifBlank { "✨" }, fontSize = 28.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { stickerDialog = false }) { Text("Fechar") } }
+        )
     }
     if (attachmentDialog) {
         AlertDialog(
