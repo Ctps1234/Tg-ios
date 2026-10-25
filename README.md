@@ -10,6 +10,7 @@ Cliente Android nativo em Kotlin/Jetpack Compose, usando TDLib para falar com a 
 - Recebimento de fotos, vídeos, documentos, áudios, mensagens de voz e animações; download sob demanda com progresso, prévia de fotos e abertura de arquivos por outro app.
 - Pesquisa local de chats e pesquisa global de mensagens, com abertura da conversa no ponto do resultado.
 - Marcação de mensagens como lidas ao abrir uma conversa.
+- Notificações locais de novas mensagens quando o processo do app ainda está ativo em segundo plano e a permissão está concedida.
 - Banco de dados TDLib mantido no armazenamento privado do app; a chave do banco é protegida pelo Android Keystore.
 - Anexos selecionados são copiados para um caminho privado que o TDLib consegue ler; cópias temporárias antigas são removidas após 48 horas.
 

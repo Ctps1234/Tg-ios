@@ -1,10 +1,18 @@
 package com.ctps1234.tgandroid
 
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -76,6 +84,7 @@ internal class TelegramSession private constructor(private val context: Context)
     val state: StateFlow<TelegramUiState> = _state.asStateFlow()
 
     @Volatile private var client: Client? = null
+    @Volatile private var appForeground: Boolean = false
     @Volatile private var apiId: Int = savedApiId() ?: 0
     @Volatile private var apiHash: String = savedApiHash()
     @Volatile private var searchGeneration: Int = 0
@@ -87,6 +96,10 @@ internal class TelegramSession private constructor(private val context: Context)
 
     fun startIfConfigured() {
         if (apiId > 0 && apiHash.isNotBlank()) startClient()
+    }
+
+    fun setAppForeground(isForeground: Boolean) {
+        appForeground = isForeground
     }
 
     fun configureAndConnect(rawApiId: String, rawApiHash: String) {
@@ -107,6 +120,7 @@ internal class TelegramSession private constructor(private val context: Context)
         if (client != null) return
         try {
             cleanOldUploadCopies()
+            ensureNotificationChannel()
             File(context.filesDir, "tdlib").mkdirs()
             File(context.filesDir, "tdlib_files").mkdirs()
             val created = Client.create(
@@ -161,8 +175,12 @@ internal class TelegramSession private constructor(private val context: Context)
             }
             is TdApi.UpdateNewMessage -> {
                 addMessage(obj.message)
-                if (_state.value.activeChatId == obj.message.chatId && !obj.message.isOutgoing) {
-                    send(TdApi.ViewMessages(obj.message.chatId, longArrayOf(obj.message.id), null, true))
+                if (!obj.message.isOutgoing) {
+                    if (_state.value.activeChatId == obj.message.chatId) {
+                        send(TdApi.ViewMessages(obj.message.chatId, longArrayOf(obj.message.id), null, true))
+                    } else if (!appForeground) {
+                        notifyIncomingMessage(obj.message.chatId)
+                    }
                 }
             }
             is TdApi.UpdateMessageSendSucceeded -> addMessage(obj.message)
@@ -373,6 +391,48 @@ internal class TelegramSession private constructor(private val context: Context)
                 )
             } else emptyList()
             _state.update { it.copy(messageSearchResults = results, searchingMessages = false, messageSearchCompleted = true) }
+        }
+    }
+
+    private fun ensureNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                NOTIFICATION_CHANNEL_ID,
+                "Mensagens do Telegram",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Avisos de novas mensagens quando o app está em segundo plano"
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PRIVATE
+            }
+            context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+    }
+
+    private fun notifyIncomingMessage(chatId: Long) {
+        if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        val chatTitle = synchronized(lock) { chats[chatId]?.title }.orEmpty().ifBlank { "Telegram" }
+        val openApp = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            chatId.hashCode(),
+            openApp,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.sym_action_chat)
+            .setContentTitle(chatTitle)
+            .setContentText("Nova mensagem")
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setGroup(NOTIFICATION_GROUP)
+            .build()
+        try {
+            NotificationManagerCompat.from(context).notify(chatId.hashCode(), notification)
+        } catch (_: SecurityException) {
+            // Notification permission can be revoked while TDLib is receiving updates.
         }
     }
 
@@ -599,6 +659,8 @@ internal class TelegramSession private constructor(private val context: Context)
         private const val GCM_IV_BYTES = 12
         private const val UPLOAD_CACHE_DIR = "telegram_uploads"
         private const val UPLOAD_CACHE_RETENTION_MS = 48L * 60L * 60L * 1000L
+        private const val NOTIFICATION_CHANNEL_ID = "telegram_messages"
+        private const val NOTIFICATION_GROUP = "telegram_conversations"
         @Volatile private var instance: TelegramSession? = null
         fun get(context: Context): TelegramSession = instance ?: synchronized(this) {
             instance ?: TelegramSession(context.applicationContext).also { instance = it }

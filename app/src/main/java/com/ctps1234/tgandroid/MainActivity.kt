@@ -1,10 +1,14 @@
 package com.ctps1234.tgandroid
 
 import android.os.Bundle
+import android.os.Build
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.content.Intent
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
+import androidx.core.content.ContextCompat
 import android.graphics.BitmapFactory
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -105,11 +109,30 @@ class MainActivity : ComponentActivity() {
         session.startIfConfigured()
         setContent { TelegramApp(session) }
     }
+
+    override fun onStart() {
+        super.onStart()
+        if (this::session.isInitialized) session.setAppForeground(true)
+    }
+
+    override fun onStop() {
+        if (this::session.isInitialized) session.setAppForeground(false)
+        super.onStop()
+    }
 }
 
 @Composable
 private fun TelegramApp(session: TelegramSession) {
     val state by session.state.collectAsState()
+    val context = LocalContext.current
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(state.authStep) {
+        if (state.authStep == AuthStep.READY && Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
     var search by remember { mutableStateOf("") }
     MaterialTheme(colorScheme = lightColorScheme(primary = TelegramBlue)) {
         Surface(Modifier.fillMaxSize(), color = AppBackground) {
