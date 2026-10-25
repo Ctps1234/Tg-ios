@@ -148,11 +148,15 @@ private fun TelegramApp(session: TelegramSession) {
                         state = state,
                         search = search,
                         searchResults = state.messageSearchResults,
+                        contacts = state.contacts,
+                        showContacts = state.showContacts,
                         searchingMessages = state.searchingMessages,
                         messageSearchCompleted = state.messageSearchCompleted,
                         onSearch = { search = it; session.searchMessages("") },
                         onSearchMessages = { session.searchMessages(search) },
                         onOpenSearchResult = { session.openChat(it.chatId, it.messageId) },
+                        onToggleContacts = { search = ""; session.toggleContactList() },
+                        onOpenContact = { session.openContact(it) },
                         onOpen = { session.openChat(it) },
                         onLoadMore = { session.loadMoreChats() },
                         onTogglePin = { session.togglePinned(it) },
@@ -279,11 +283,15 @@ private fun ChatListScreen(
     state: TelegramUiState,
     search: String,
     searchResults: List<TelegramSearchResult>,
+    contacts: List<TelegramContact>,
+    showContacts: Boolean,
     searchingMessages: Boolean,
     messageSearchCompleted: Boolean,
     onSearch: (String) -> Unit,
     onSearchMessages: () -> Unit,
     onOpenSearchResult: (TelegramSearchResult) -> Unit,
+    onToggleContacts: () -> Unit,
+    onOpenContact: (Long) -> Unit,
     onOpen: (Long) -> Unit,
     onLoadMore: () -> Unit,
     onTogglePin: (Long) -> Unit,
@@ -297,10 +305,11 @@ private fun ChatListScreen(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             TopAppBar(
-                title = { Text(if (state.showArchivedChats) "Arquivadas" else "Chats", fontWeight = FontWeight.Bold) },
+                title = { Text(when { showContacts -> "Contatos"; state.showArchivedChats -> "Arquivadas"; else -> "Chats" }, fontWeight = FontWeight.Bold) },
                 actions = {
                     IconButton(onClick = { searchVisible = !searchVisible; if (!searchVisible) onSearch("") }) { Icon(Icons.Default.Search, "Pesquisar") }
-                    TextButton(onClick = onToggleArchived) { Text(if (state.showArchivedChats) "Chats" else "Arquivo") }
+                    TextButton(onClick = onToggleContacts) { Text(if (showContacts) "Chats" else "Contatos") }
+                    if (!showContacts) TextButton(onClick = onToggleArchived) { Text(if (state.showArchivedChats) "Chats" else "Arquivo") }
                     TextButton(onClick = onLogout) { Text("Sair") }
                 }
             )
@@ -313,16 +322,33 @@ private fun ChatListScreen(
                         value = search,
                         onValueChange = onSearch,
                         modifier = Modifier.weight(1f),
-                        label = { Text("Pesquisar conversas e mensagens") },
+                        label = { Text(if (showContacts) "Pesquisar contatos" else "Pesquisar conversas e mensagens") },
                         singleLine = true
                     )
-                    TextButton(onClick = onSearchMessages, enabled = search.isNotBlank() && !searchingMessages) {
-                        Text(if (searchingMessages) "Buscando…" else "Mensagens")
+                    if (!showContacts) {
+                        TextButton(onClick = onSearchMessages, enabled = search.isNotBlank() && !searchingMessages) {
+                            Text(if (searchingMessages) "Buscando…" else "Mensagens")
+                        }
                     }
                 }
             }
             state.error?.let { Text(it, color = Color(0xFFB3261E), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontSize = 13.sp) }
-            if (searchingMessages || messageSearchCompleted) {
+            if (showContacts) {
+                if (state.loadingContacts) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = TelegramBlue) }
+                } else {
+                    val filteredContacts = contacts.filter { it.name.contains(search, ignoreCase = true) }
+                    if (filteredContacts.isEmpty()) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Nenhum contato encontrado.", color = Muted) }
+                    } else {
+                        LazyColumn(Modifier.fillMaxSize()) {
+                            items(filteredContacts, key = { it.userId }) { contact ->
+                                ContactRow(contact) { onOpenContact(contact.userId) }
+                            }
+                        }
+                    }
+                }
+            } else if (searchingMessages || messageSearchCompleted) {
                 if (searchingMessages) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = TelegramBlue) }
                 } else if (searchResults.isEmpty()) {
@@ -374,6 +400,18 @@ private fun ChatListScreen(
             }
         }
     }
+}
+
+@Composable
+private fun ContactRow(contact: TelegramContact, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(48.dp).background(avatarColor(contact.name), CircleShape), contentAlignment = Alignment.Center) {
+            Text(contact.name.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(contact.name, fontWeight = FontWeight.Medium, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+    Divider(Modifier.padding(start = 76.dp), color = Color(0xFFF0F0F0), thickness = 0.5.dp)
 }
 
 @Composable

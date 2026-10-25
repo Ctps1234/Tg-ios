@@ -38,6 +38,11 @@ internal data class TelegramChat(
     val isArchived: Boolean = false
 )
 
+internal data class TelegramContact(
+    val userId: Long,
+    val name: String
+)
+
 internal data class TelegramSticker(
     val fileId: Int,
     val emoji: String,
@@ -71,6 +76,9 @@ internal data class TelegramMessage(
 internal data class TelegramUiState(
     val authStep: AuthStep = AuthStep.CONFIG,
     val chats: List<TelegramChat> = emptyList(),
+    val contacts: List<TelegramContact> = emptyList(),
+    val loadingContacts: Boolean = false,
+    val showContacts: Boolean = false,
     val stickers: List<TelegramSticker> = emptyList(),
     val showArchivedChats: Boolean = false,
     val messagesByChat: Map<Long, List<TelegramMessage>> = emptyMap(),
@@ -99,6 +107,7 @@ internal class TelegramSession private constructor(private val context: Context)
     @Volatile private var apiHash: String = savedApiHash()
     @Volatile private var searchGeneration: Int = 0
     @Volatile private var stickersRequested: Boolean = false
+    @Volatile private var contactsRequested: Boolean = false
     private val chats = linkedMapOf<Long, TdApi.Chat>()
     private val pinnedChatIds = mutableSetOf<Long>()
     private val archivedChatIds = mutableSetOf<Long>()
@@ -259,6 +268,7 @@ internal class TelegramSession private constructor(private val context: Context)
                 _state.update { it.copy(authStep = AuthStep.READY, error = null, status = "Conectado") }
                 loadChats()
                 loadInstalledStickers()
+                loadContacts()
             }
             is TdApi.AuthorizationStateLoggingOut -> setStep(AuthStep.CONNECTING, "Encerrando sessão…")
             is TdApi.AuthorizationStateClosing -> setStep(AuthStep.CONNECTING, "Fechando sessão…")
@@ -409,6 +419,44 @@ internal class TelegramSession private constructor(private val context: Context)
         send(TdApi.SendMessage(chatId, null, createReplyTo(replyToMessageId), null, null, content))
     }
 
+    private fun loadContacts() {
+        if (contactsRequested) return
+        contactsRequested = true
+        _state.update { it.copy(loadingContacts = true) }
+        send(TdApi.GetContacts()) { result ->
+            if (result is TdApi.Users) {
+                val contacts = result.users.map { user ->
+                    val displayName = listOf(user.firstName, user.lastName).filter { it.isNotBlank() }.joinToString(" ")
+                    TelegramContact(user.id, displayName.ifBlank { "Contato" })
+                }.sortedBy { it.name.lowercase() }
+                _state.update { it.copy(contacts = contacts, loadingContacts = false) }
+            } else {
+                contactsRequested = false
+                _state.update { it.copy(loadingContacts = false) }
+            }
+        }
+    }
+
+    fun toggleContactList() {
+        val showContacts = !_state.value.showContacts
+        _state.update {
+            it.copy(
+                showContacts = showContacts,
+                showArchivedChats = false,
+                messageSearchResults = emptyList(),
+                searchingMessages = false,
+                messageSearchCompleted = false
+            )
+        }
+        if (showContacts && _state.value.contacts.isEmpty()) loadContacts()
+    }
+
+    fun openContact(userId: Long) {
+        send(TdApi.CreatePrivateChat(userId, true)) { result ->
+            if (result is TdApi.Chat) openChat(result.id)
+        }
+    }
+
     fun sendPhoto(chatId: Long, file: File, caption: String, replyToMessageId: Long? = null) {
         if (!file.isFile) { setError("A foto selecionada não está disponível."); return }
         val captionText = caption.trim().takeIf { it.isNotEmpty() }?.let { TdApi.FormattedText(it, emptyArray()) }
@@ -515,7 +563,7 @@ internal class TelegramSession private constructor(private val context: Context)
     }
 
     fun setArchivedFolder(showArchived: Boolean) {
-        _state.update { it.copy(showArchivedChats = showArchived) }
+        _state.update { it.copy(showArchivedChats = showArchived, showContacts = false) }
         synchronized(lock) { publishChats() }
         val chatList = if (showArchived) TdApi.ChatListArchive() else TdApi.ChatListMain()
         send(TdApi.LoadChats(chatList, 100))
@@ -631,7 +679,7 @@ internal class TelegramSession private constructor(private val context: Context)
         is TdApi.MessageDocument -> content.caption?.text?.takeIf { it.isNotBlank() }
             ?: content.document?.fileName?.takeIf { it.isNotBlank() }?.let { "📎 $it" } ?: "📎 Arquivo"
         is TdApi.MessageAnimation -> content.caption?.text?.takeIf { it.isNotBlank() } ?: "GIF"
-        is TdApi.MessageSticker -> content.sticker?.sticker?.emoji?.takeIf { it.isNotBlank() } ?: "Sticker"
+        is TdApi.MessageSticker -> content.sticker?.emoji?.takeIf { it.isNotBlank() } ?: "Sticker"
         is TdApi.MessageAudio -> content.caption?.text?.takeIf { it.isNotBlank() } ?: "🎵 Áudio"
         is TdApi.MessageVoiceNote -> content.caption?.text?.takeIf { it.isNotBlank() } ?: "🎤 Mensagem de voz"
         else -> "Mensagem"
