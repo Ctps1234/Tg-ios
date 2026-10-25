@@ -32,7 +32,12 @@ internal data class TelegramMessage(
     val id: Long,
     val text: String,
     val outgoing: Boolean,
-    val date: Int
+    val date: Int,
+    val fileId: Int? = null,
+    val fileName: String? = null,
+    val mediaType: String? = null,
+    val localPath: String? = null,
+    val downloadProgress: Float? = null
 )
 
 internal data class TelegramUiState(
@@ -113,6 +118,7 @@ internal class TelegramSession private constructor(private val context: Context)
             }
             is TdApi.UpdateNewMessage -> addMessage(obj.message)
             is TdApi.UpdateMessageSendSucceeded -> addMessage(obj.message)
+            is TdApi.UpdateFile -> updateDownloadedFile(obj.file)
             is TdApi.UpdateMessageContent -> synchronized(lock) {
                 val list = messages[obj.chatId]
                 val index = list?.indexOfFirst { it.id == obj.messageId } ?: -1
@@ -270,9 +276,57 @@ internal class TelegramSession private constructor(private val context: Context)
         publishChats()
     }
 
-    private fun toMessage(message: TdApi.Message) = TelegramMessage(
-        message.id, contentText(message.content), message.isOutgoing, message.date
-    )
+    private fun toMessage(message: TdApi.Message): TelegramMessage {
+        val attachment = attachmentInfo(message.content)
+        return TelegramMessage(
+            id = message.id,
+            text = contentText(message.content),
+            outgoing = message.isOutgoing,
+            date = message.date,
+            fileId = attachment?.first?.id,
+            fileName = attachment?.second,
+            mediaType = attachment?.third,
+            localPath = attachment?.first?.let { file -> file.local.path.takeIf { file.local.isDownloadingCompleted && it.isNotBlank() } },
+            downloadProgress = attachment?.first?.let { file ->
+                if (file.local.isDownloadingActive || file.local.isDownloadingCompleted) {
+                    if (file.size > 0) (file.local.downloadedSize.toFloat() / file.size).coerceIn(0f, 1f) else 0f
+                } else null
+            }
+        )
+    }
+
+    private fun attachmentInfo(content: TdApi.MessageContent): Triple<TdApi.File, String?, String>? = when (content) {
+        is TdApi.MessagePhoto -> content.photo?.sizes?.lastOrNull()?.photo?.let { Triple(it, "photo.jpg", "image") }
+        is TdApi.MessageVideo -> content.video?.video?.let { Triple(it, content.video.fileName, "video") }
+        is TdApi.MessageDocument -> content.document?.document?.let { Triple(it, content.document.fileName, "document") }
+        is TdApi.MessageAudio -> content.audio?.audio?.let { Triple(it, content.audio.fileName, "audio") }
+        is TdApi.MessageVoiceNote -> content.voiceNote?.voice?.let { Triple(it, "Mensagem de voz", "audio") }
+        is TdApi.MessageAnimation -> content.animation?.animation?.let { Triple(it, content.animation.fileName, "animation") }
+        else -> null
+    }
+
+    private fun updateDownloadedFile(file: TdApi.File) = synchronized(lock) {
+        messages.forEach { (chatId, list) ->
+            var changed = false
+            list.indices.forEach { index ->
+                if (list[index].fileId == file.id) {
+                    val local = file.local
+                    list[index] = list[index].copy(
+                        localPath = local.path.takeIf { local.isDownloadingCompleted && it.isNotBlank() },
+                        downloadProgress = if (local.isDownloadingActive || local.isDownloadingCompleted) {
+                            if (file.size > 0) (local.downloadedSize.toFloat() / file.size).coerceIn(0f, 1f) else 0f
+                        } else null
+                    )
+                    changed = true
+                }
+            }
+            if (changed) publishMessages(chatId)
+        }
+    }
+
+    fun downloadAttachment(fileId: Int) {
+        send(TdApi.DownloadFile(fileId, 16, 0, 0, false))
+    }
 
     private fun contentText(content: TdApi.MessageContent): String = when (content) {
         is TdApi.MessageText -> content.text.text

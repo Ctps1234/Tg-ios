@@ -2,6 +2,11 @@ package com.ctps1234.tgandroid
 
 import android.os.Bundle
 import android.net.Uri
+import android.content.Intent
+import android.webkit.MimeTypeMap
+import androidx.core.content.FileProvider
+import android.graphics.BitmapFactory
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
@@ -10,6 +15,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,7 +29,9 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -62,6 +70,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -123,7 +133,8 @@ private fun TelegramApp(session: TelegramSession) {
                         onBack = { session.closeChat() },
                         onSend = { session.sendText(activeId, it) },
                         onSendPhoto = { file, caption -> session.sendPhoto(activeId, file, caption) },
-                        onSendDocument = { file, caption -> session.sendDocument(activeId, file, caption) }
+                        onSendDocument = { file, caption -> session.sendDocument(activeId, file, caption) },
+                        onDownloadAttachment = { session.downloadAttachment(it) }
                     )
                 }
             }
@@ -302,7 +313,8 @@ private fun ConversationScreen(
     onBack: () -> Unit,
     onSend: (String) -> Unit,
     onSendPhoto: (File, String) -> Unit,
-    onSendDocument: (File, String) -> Unit
+    onSendDocument: (File, String) -> Unit,
+    onDownloadAttachment: (Int) -> Unit
 ) {
     var draft by remember(title) { mutableStateOf("") }
     var attachmentDialog by remember { mutableStateOf(false) }
@@ -393,7 +405,10 @@ private fun ConversationScreen(
                     items(messages, key = { it.id }) { message ->
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.outgoing) Arrangement.End else Arrangement.Start) {
                             Surface(color = if (message.outgoing) Color(0xFFD9FDD3) else Color.White, shape = RoundedCornerShape(16.dp), shadowElevation = 1.dp, modifier = Modifier.padding(vertical = 3.dp)) {
-                                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                Column(Modifier.widthIn(max = 300.dp).padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                    if (message.fileId != null) {
+                                        ReceivedAttachment(message, onDownloadAttachment)
+                                    }
                                     Text(message.text, color = Color(0xFF202328), fontSize = 15.sp)
                                     Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
                                         Text(if (message.date > 0) DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(message.date * 1000L)) else "", color = Muted, fontSize = 10.sp)
@@ -433,6 +448,63 @@ private fun ConversationScreen(
             dismissButton = { TextButton(onClick = { attachmentDialog = false }) { Text("Cancelar") } }
         )
     }
+}
+
+@Composable
+private fun ReceivedAttachment(message: TelegramMessage, onDownload: (Int) -> Unit) {
+    val context = LocalContext.current
+    var bitmap by remember(message.localPath) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    LaunchedEffect(message.localPath) {
+        val path = message.localPath
+        bitmap = if (message.mediaType == "image" && path != null) {
+            withContext(Dispatchers.IO) { decodePreview(path)?.asImageBitmap() }
+        } else null
+    }
+    Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+        if (message.mediaType == "image" && bitmap != null) {
+            Image(
+                bitmap = bitmap!!,
+                contentDescription = message.fileName ?: "Foto recebida",
+                modifier = Modifier.fillMaxWidth().height(190.dp).clip(RoundedCornerShape(12.dp)),
+                contentScale = ContentScale.Crop
+            )
+        }
+        if (message.localPath != null) {
+            TextButton(onClick = {
+                try {
+                    val file = File(message.localPath)
+                    val extension = file.extension.lowercase()
+                    val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "application/octet-stream"
+                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+                    context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                } catch (_: Exception) {
+                    Toast.makeText(context, "Não foi possível abrir este arquivo.", Toast.LENGTH_SHORT).show()
+                }
+            }, modifier = Modifier.fillMaxWidth()) {
+                Text("Abrir ${message.fileName ?: "arquivo"}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        } else if (message.downloadProgress != null) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
+                CircularProgressIndicator(progress = { message.downloadProgress ?: 0f }, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+                Text("Baixando ${((message.downloadProgress * 100).toInt())}%", color = Muted, fontSize = 12.sp)
+            }
+        } else {
+            TextButton(onClick = { message.fileId?.let(onDownload) }, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.CloudDownload, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Baixar ${message.fileName ?: if (message.mediaType == "image") "foto" else "arquivo"}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+private fun decodePreview(path: String): android.graphics.Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(path, bounds)
+    var sampleSize = 1
+    while (bounds.outWidth / sampleSize > 1200 || bounds.outHeight / sampleSize > 1200) sampleSize *= 2
+    return BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sampleSize })
 }
 
 private fun avatarColor(value: String): Color {
