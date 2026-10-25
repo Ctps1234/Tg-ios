@@ -179,7 +179,8 @@ private fun TelegramApp(session: TelegramSession) {
                         onLoadOlder = { session.loadOlderMessages(activeId) },
                         onDeleteMessage = { session.deleteMessage(activeId, it) },
                         onEditMessage = { messageId, text -> session.editMessageText(activeId, messageId, text) },
-                        onForwardMessage = { messageId, targetChatId -> session.forwardMessage(activeId, messageId, targetChatId) }
+                        onForwardMessage = { messageId, targetChatId -> session.forwardMessage(activeId, messageId, targetChatId) },
+                        onToggleReaction = { messageId, emoji -> session.toggleReaction(activeId, messageId, emoji) }
                     )
                 }
             }
@@ -452,7 +453,8 @@ private fun ConversationScreen(
     onLoadOlder: () -> Unit,
     onDeleteMessage: (Long) -> Unit,
     onEditMessage: (Long, String) -> Unit,
-    onForwardMessage: (Long, Long) -> Unit
+    onForwardMessage: (Long, Long) -> Unit,
+    onToggleReaction: (Long, String) -> Unit
 ) {
     var draft by remember(title) { mutableStateOf("") }
     var attachmentDialog by remember { mutableStateOf(false) }
@@ -603,6 +605,19 @@ private fun ConversationScreen(
                                         ReceivedAttachment(message, onDownloadAttachment)
                                     }
                                     Text(message.text, color = Color(0xFF202328), fontSize = 15.sp)
+                                    if (message.reactions.isNotEmpty()) {
+                                        Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            message.reactions.take(5).forEach { reaction ->
+                                                val selected = message.chosenReactions.any { reaction.startsWith(it) }
+                                                Surface(
+                                                    color = if (selected) Color(0xFFD6E9F8) else Color(0xFFF0F2F4),
+                                                    shape = RoundedCornerShape(12.dp)
+                                                ) {
+                                                    Text(reaction, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp), color = Color(0xFF33383D), fontSize = 12.sp)
+                                                }
+                                            }
+                                        }
+                                    }
                                     Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
                                         Text(if (message.date > 0) DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(message.date * 1000L)) else "", color = Muted, fontSize = 10.sp)
                                         if (message.outgoing) { Spacer(Modifier.width(3.dp)); Icon(Icons.Default.Check, null, tint = TelegramBlue, modifier = Modifier.size(12.dp)) }
@@ -664,6 +679,15 @@ private fun ConversationScreen(
             title = { Text(if (message.outgoing) "Mensagem enviada" else "Mensagem recebida") },
             text = {
                 Column {
+                    Text("Reagir", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                        listOf("👍", "❤️", "😂", "😮", "😢").forEach { emoji ->
+                            TextButton(onClick = {
+                                onToggleReaction(message.id, emoji)
+                                messageActions = null
+                            }) { Text(emoji, fontSize = 20.sp) }
+                        }
+                    }
                     TextButton(onClick = {
                         replyToMessage = message
                         messageActions = null

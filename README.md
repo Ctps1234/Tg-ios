@@ -9,7 +9,7 @@ Cliente Android nativo em Kotlin/Jetpack Compose, usando TDLib para falar com a 
 - Envio de mensagens de texto, fotos da galeria ou câmera (até 10 MB) e arquivos (até 2 GB), com legenda opcional.
 - Recebimento de fotos, vídeos, documentos, áudios, mensagens de voz e animações; download sob demanda com progresso, prévia de fotos e abertura de arquivos por outro app.
 - Pesquisa local de chats e pesquisa global de mensagens, com abertura da conversa no ponto do resultado.
-- Marcação de mensagens como lidas ao abrir uma conversa.
+- Marcação de mensagens como lidas ao abrir uma conversa; respostas, encaminhamento e reações rápidas.
 - Notificações locais de novas mensagens quando o processo do app ainda está ativo em segundo plano e a permissão está concedida.
 - Banco de dados TDLib mantido no armazenamento privado do app; a chave do banco é protegida pelo Android Keystore.
 - Anexos selecionados são copiados para um caminho privado que o TDLib consegue ler; cópias temporárias antigas são removidas após 48 horas.
@@ -45,7 +45,7 @@ Faça backup do keystore e das senhas. Sem a chave original, futuras versões n�
 
 A dependência TDLib acima é um pacote Android de terceiros que contém bibliotecas nativas para Android; não é um binário publicado diretamente pelo Telegram. Antes de usar uma conta importante ou distribuir uma versão, audite a origem/hash do AAR ou substitua-o por uma compilação reproduzível de TDLib oficial. Não use esta build para conversas sensíveis enquanto essa auditoria não for feita.
 
-Este cliente cobre o fluxo básico de autenticação, lista de conversas, mensagens de texto e transferência de anexos. Ainda faltam chamadas de áudio/vídeo, notificações confiáveis em segundo plano, contatos e sincronização de contatos, gerenciamento completo de grupos/canais e tópicos, envio/seleção de stickers e emoji, pesquisa global, múltiplas contas, edição/resposta/encaminhamento avançados, retomada de transferências, testes de acessibilidade e validação em dispositivos físicos. Mensagens de chats secretos continuam sujeitas às limitações próprias de clientes TDLib. Portanto, não é equivalente ao conjunto completo de recursos do Telegram oficial.
+Este cliente cobre o fluxo básico de autenticação, lista de conversas, mensagens de texto e transferência de anexos. Ainda faltam chamadas de áudio/vídeo, notificações confiáveis em segundo plano, contatos e sincronização de contatos, gerenciamento completo de grupos/canais e tópicos, envio/seleção de stickers, pesquisa global, múltiplas contas, edição/resposta/encaminhamento avançados, retomada de transferências, testes de acessibilidade e validação em dispositivos físicos. Mensagens de chats secretos continuam sujeitas às limitações próprias de clientes TDLib. Portanto, não é equivalente ao conjunto completo de recursos do Telegram oficial.
 
 ## Compilação
 

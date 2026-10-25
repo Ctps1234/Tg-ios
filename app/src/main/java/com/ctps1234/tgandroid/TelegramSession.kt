@@ -55,6 +55,8 @@ internal data class TelegramMessage(
     val fileId: Int? = null,
     val fileName: String? = null,
     val mediaType: String? = null,
+    val reactions: List<String> = emptyList(),
+    val chosenReactions: Set<String> = emptySet(),
     val localPath: String? = null,
     val downloadProgress: Float? = null
 )
@@ -191,6 +193,23 @@ internal class TelegramSession private constructor(private val context: Context)
                 if (index >= 0 && list != null) {
                     val old = list[index]
                     list[index] = old.copy(text = contentText(obj.newContent))
+                    publishMessages(obj.chatId)
+                }
+            }
+            is TdApi.UpdateMessageReactions -> synchronized(lock) {
+                val list = messages[obj.chatId]
+                val index = list?.indexOfFirst { it.id == obj.messageId } ?: -1
+                if (index >= 0 && list != null) {
+                    val values = obj.reactions.reactions.mapNotNull { reaction ->
+                        val emoji = (reaction.type as? TdApi.ReactionTypeEmoji)?.emoji ?: return@mapNotNull null
+                        emoji to reaction.totalCount
+                    }
+                    list[index] = list[index].copy(
+                        reactions = values.map { "${it.first} ${it.second}" },
+                        chosenReactions = values.filter { (emoji, _) ->
+                            obj.reactions.reactions.any { it.type is TdApi.ReactionTypeEmoji && it.isChosen && (it.type as TdApi.ReactionTypeEmoji).emoji == emoji }
+                        }.map { it.first }.toSet()
+                    )
                     publishMessages(obj.chatId)
                 }
             }
@@ -338,6 +357,17 @@ internal class TelegramSession private constructor(private val context: Context)
 
     fun forwardMessage(fromChatId: Long, messageId: Long, toChatId: Long) {
         send(TdApi.ForwardMessages(toChatId, null, fromChatId, longArrayOf(messageId), null, false, false))
+    }
+
+    fun toggleReaction(chatId: Long, messageId: Long, emoji: String) {
+        val alreadyChosen = synchronized(lock) {
+            messages[chatId]?.firstOrNull { it.id == messageId }?.chosenReactions?.contains(emoji) == true
+        }
+        if (alreadyChosen) {
+            send(TdApi.RemoveMessageReaction(chatId, messageId, TdApi.ReactionTypeEmoji(emoji)))
+        } else {
+            send(TdApi.AddMessageReaction(chatId, messageId, TdApi.ReactionTypeEmoji(emoji), false, true))
+        }
     }
 
     fun sendPhoto(chatId: Long, file: File, caption: String, replyToMessageId: Long? = null) {
