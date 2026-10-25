@@ -424,12 +424,14 @@ internal class TelegramSession private constructor(private val context: Context)
 
     private fun contentText(content: TdApi.MessageContent): String = when (content) {
         is TdApi.MessageText -> content.text.text
-        is TdApi.MessagePhoto -> "📷 Foto"
-        is TdApi.MessageVideo -> "▶ Vídeo"
-        is TdApi.MessageDocument -> content.document?.fileName?.takeIf { it.isNotBlank() }?.let { "📎 $it" } ?: "📎 Arquivo"
+        is TdApi.MessagePhoto -> content.caption?.text?.takeIf { it.isNotBlank() } ?: "📷 Foto"
+        is TdApi.MessageVideo -> content.caption?.text?.takeIf { it.isNotBlank() } ?: "▶ Vídeo"
+        is TdApi.MessageDocument -> content.caption?.text?.takeIf { it.isNotBlank() }
+            ?: content.document?.fileName?.takeIf { it.isNotBlank() }?.let { "📎 $it" } ?: "📎 Arquivo"
+        is TdApi.MessageAnimation -> content.caption?.text?.takeIf { it.isNotBlank() } ?: "GIF"
         is TdApi.MessageSticker -> "Sticker"
-        is TdApi.MessageAudio -> "🎵 Áudio"
-        is TdApi.MessageVoiceNote -> "🎤 Mensagem de voz"
+        is TdApi.MessageAudio -> content.caption?.text?.takeIf { it.isNotBlank() } ?: "🎵 Áudio"
+        is TdApi.MessageVoiceNote -> content.caption?.text?.takeIf { it.isNotBlank() } ?: "🎤 Mensagem de voz"
         else -> "Mensagem"
     }
 
