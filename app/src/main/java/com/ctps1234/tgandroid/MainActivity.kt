@@ -328,11 +328,20 @@ private fun ChatListScreen(
                 }
             } else if (state.chats.isEmpty()) {
                 Column(Modifier.fillMaxSize().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                    CircularProgressIndicator(color = TelegramBlue)
+                    if (!state.showArchivedChats || state.error != null) CircularProgressIndicator(color = TelegramBlue)
                     Spacer(Modifier.height(14.dp))
-                    Text(if (state.error == null) "Carregando suas conversas…" else "Não foi possível carregar as conversas", color = Muted)
+                    Text(
+                        when {
+                            state.showArchivedChats && state.error == null -> "Nenhuma conversa arquivada"
+                            state.error == null -> "Carregando suas conversas…"
+                            else -> "Não foi possível carregar as conversas"
+                        },
+                        color = Muted
+                    )
                     Spacer(Modifier.height(10.dp))
-                    TextButton(onClick = onLoadMore) { Text("Tentar novamente") }
+                    TextButton(onClick = if (state.showArchivedChats && state.error == null) onToggleArchived else onLoadMore) {
+                        Text(if (state.showArchivedChats && state.error == null) "Voltar aos chats" else "Tentar novamente")
+                    }
                 }
             } else {
                 val filtered = state.chats.filter { it.title.contains(search, true) || it.preview.contains(search, true) }
@@ -449,12 +458,13 @@ private fun ConversationScreen(
     var messageToDelete by remember { mutableStateOf<TelegramMessage?>(null) }
     var messageToEdit by remember { mutableStateOf<TelegramMessage?>(null) }
     var editedText by remember { mutableStateOf("") }
+    var cameraFile by remember { mutableStateOf<File?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val messageListState = rememberLazyListState()
 
-    fun prepareAttachment(uri: Uri?, isPhoto: Boolean) {
-        if (uri == null) return
+    fun prepareAttachment(uri: Uri?, isPhoto: Boolean, cleanupFile: File? = null) {
+        if (uri == null) { cleanupFile?.delete(); return }
         scope.launch {
             preparingAttachment = true
             attachmentError = null
@@ -474,11 +484,30 @@ private fun ConversationScreen(
             } catch (failure: Exception) {
                 attachmentError = failure.message ?: "Não foi possível preparar o anexo."
             } finally {
+                cleanupFile?.delete()
+                if (cameraFile == cleanupFile) cameraFile = null
                 preparingAttachment = false
             }
         }
     }
 
+    val cameraPicker = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        val file = cameraFile
+        if (success && file != null) {
+            val uri = try {
+                FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+            } catch (_: Exception) {
+                Toast.makeText(context, "Não foi possível preparar a câmera.", Toast.LENGTH_SHORT).show()
+                file.delete()
+                cameraFile = null
+                null
+            }
+            if (uri != null) prepareAttachment(uri, true, file)
+        } else {
+            file?.delete()
+            cameraFile = null
+        }
+    }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         prepareAttachment(uri, true)
     }
@@ -592,6 +621,23 @@ private fun ConversationScreen(
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("Escolher foto") }
+                    TextButton(
+                        onClick = {
+                            attachmentDialog = false
+                            val directory = File(context.cacheDir, "telegram_camera").apply { mkdirs() }
+                            val photo = File(directory, "capture_${System.currentTimeMillis()}.jpg")
+                            cameraFile = photo
+                            try {
+                                val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", photo)
+                                cameraPicker.launch(uri)
+                            } catch (_: Exception) {
+                                photo.delete()
+                                cameraFile = null
+                                Toast.makeText(context, "Nenhuma câmera disponível.", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Tirar foto") }
                     TextButton(
                         onClick = {
                             attachmentDialog = false
