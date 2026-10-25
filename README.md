@@ -20,6 +20,24 @@ Cliente Android nativo em Kotlin/Jetpack Compose, usando TDLib para falar com a 
 
 As credenciais do aplicativo ficam nas preferências privadas do app; não as adicione ao Git. A sessão local fica dentro do sandbox Android do aplicativo. Desinstalar o app remove a sessão local e a chave do Android Keystore.
 
+## Assinatura persistente para atualizar sem reinstalar
+
+O APK de debug continua sendo gerado para testes rápidos. Para instalar atualizações por cima da mesma instalação, configure uma chave de release persistente. Uma troca da chave de debug atual para a nova chave de release exige **desinstalar uma única vez**; depois, instale sempre o APK `telegram-android-release-*` assinado pela mesma chave. Os `versionCode` das releases do Actions são incrementados com o número da execução.
+
+1. Gere uma chave privada local e guarde uma cópia segura (não a envie por chat e não a coloque no Git):
+   ```sh
+   keytool -genkeypair -v -keystore telegram-release.jks -storetype JKS -keyalg RSA -keysize 2048 -validity 10000 -alias tg-android
+   ```
+2. Converta o keystore para Base64. No Linux, use `base64 -w 0 telegram-release.jks`; no macOS, `base64 < telegram-release.jks | tr -d '\n'`. No Windows PowerShell, use `[Convert]::ToBase64String([IO.File]::ReadAllBytes("telegram-release.jks"))`.
+3. No GitHub, abra **Settings → Secrets and variables → Actions → New repository secret** e crie estes quatro secrets:
+   - `ANDROID_KEYSTORE_BASE64`: conteúdo Base64 do arquivo `.jks`.
+   - `ANDROID_KEYSTORE_PASSWORD`: senha do keystore.
+   - `ANDROID_KEY_ALIAS`: neste exemplo, `tg-android`.
+   - `ANDROID_KEY_PASSWORD`: senha da chave/alias.
+4. Faça um push ou execute manualmente o workflow **Android APK**. Baixe `telegram-android-release-*` em **Actions → execução → Artifacts**.
+
+Faça backup do keystore e das senhas. Sem a chave original, futuras versões não poderão atualizar por cima desta instalação. Não use os dados de uma chave de release em pull requests de forks.
+
 ## Segurança e escopo
 
 A dependência TDLib acima é um pacote Android de terceiros que contém bibliotecas nativas para Android; não é um binário publicado diretamente pelo Telegram. Antes de usar uma conta importante ou distribuir uma versão, audite a origem/hash do AAR ou substitua-o por uma compilação reproduzível de TDLib oficial. Não use esta build para conversas sensíveis enquanto essa auditoria não for feita.

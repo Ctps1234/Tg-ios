@@ -59,6 +59,38 @@ jobs:
           fi
           exit "${build_status}"
 
+      - name: Build APK with persistent release key (when configured)
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${ANDROID_KEYSTORE_BASE64:-}" && -z "${ANDROID_KEYSTORE_PASSWORD:-}" && -z "${ANDROID_KEY_ALIAS:-}" && -z "${ANDROID_KEY_PASSWORD:-}" ]]; then
+            echo "Release signing secrets are not configured; skipping signed release APK."
+            echo "Configure the four ANDROID_* repository Actions secrets to enable a reusable signed APK." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ -z "${ANDROID_KEYSTORE_BASE64:-}" || -z "${ANDROID_KEYSTORE_PASSWORD:-}" || -z "${ANDROID_KEY_ALIAS:-}" || -z "${ANDROID_KEY_PASSWORD:-}" ]]; then
+            echo "All four Android signing secrets must be configured." >&2
+            exit 1
+          fi
+          export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/telegram-release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
+          ./gradlew --no-daemon --console=plain -PappVersionCode="$GITHUB_RUN_NUMBER" :app:assembleRelease
+          rm -f "$ANDROID_KEYSTORE_PATH"
+
+      - name: Upload signed release APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: telegram-android-release-${{ github.sha }}
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Upload build log on failure
         if: failure()
         uses: actions/upload-artifact@v7
